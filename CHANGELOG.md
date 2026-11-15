@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.2.0 — 2026-11-15
 - The task list reads like a document: one background, no lines between rows, rounded hovered and selected rows. Sections, nesting, dragging and the details drawer work as before.
 - N creates a new task (shown on the New task button). The Name field has focus when a task dialog opens, Return saves, and ⌘Return saves from the description too.
 - The Labels tab is now **Settings** (⌘S), with New label above the labels table and New relation type above the relation types table.
