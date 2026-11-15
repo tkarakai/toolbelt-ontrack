@@ -2,7 +2,7 @@ import { json, packagePlugin, run, updateJSONVersion, type ReleaseConfig } from 
 
 export default {
 	repo: "tkarakai/toolbelt-ontrack",
-	hostVersion: "0.3.9",
+	hostVersion: "0.3.10",
 	products: {
 		plugin: {
 			changelog: "CHANGELOG.md",
