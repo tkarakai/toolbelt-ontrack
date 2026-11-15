@@ -22,7 +22,7 @@ keeps room for a real agent later.
   turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
   9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Pin/Unpin** (P), **Mark
   read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Add update**
-  (⇧U), **Relate to…** (R) and **Delete** act on the selected task. Settle, snooze, unpin, archive and delete offer
+  (↵ or ⇧U), **Relate to…** (R) and **Delete** act on the selected task. Settle, snooze, unpin, archive and delete offer
   **Undo** for five seconds.
 - **Drag** tasks within Pinned, Inbox and Working to order them, or between sections: into Pinned
   pins, into Working starts work, Working → Inbox is Done for now, onto Settled settles, out of
@@ -31,14 +31,35 @@ keeps room for a real agent later.
   due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
   task marks it read. Nothing settles on its own.
 - Search matches names, descriptions, updates and label values; each label is a toolbar filter.
-  The details drawer shows state, time spent, labels, related tasks, the description and the
-  updates, newest first, each with its own Edit and Delete.
+- The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
-- The menu-bar **quick view** is a focus list: what you're working on (with elapsed time), then
-  Pinned and the Inbox in your order, with Done for now / Start working and Settle buttons. Enter
-  opens the task in the main window. The plugin badge counts open tasks that are unread or
-  overdue.
+- The menu-bar **quick view** is a focus list: what you're working on (with elapsed time and its
+  latest update), then Pinned and the Inbox in your order. Without opening the window you can
+  jot a new task into the Inbox (N, then ↵), start or stop work (W/D), add an update (U, then ↵),
+  snooze until tomorrow 9:00 (Z) and settle (S). Enter opens the task in the main window. The
+  plugin badge counts open tasks that are unread or overdue.
+
+### Editing in the drawer
+
+The details drawer edits the selected task in place; there's no dialog to open. → moves into it
+(opening it if it's closed) and Esc comes back to the list. From top to bottom:
+
+- A bar of icons for the task's main actions (Start, Settle, Snooze, Pin…), with every action in
+  the ⋯ menu.
+- The **name**, large: click it (or press E on the task) to rename it; ↵ saves, Esc puts it back.
+- **Status**, **Due** and **Labels**, which read as text until you point at them: pick a status
+  (Snooze asks until when), a due date, or add, change and remove label pills.
+- The **description**, formatted: click it or press ↵ on it to edit the Markdown; leaving it or
+  ⌘↵ saves, Esc puts it back.
+- One quiet line of facts: the ID, pinned or archived, time worked, when it was created and
+  changed. Related tasks follow when there are any.
+- **Updates**: ↵ on a task in the list lands in the update box (or ⇧U). Write, press ⌘↵, and the
+  box is ready for the next one. Below, every update, newest first: Tab into them, move with
+  ↑/↓, press E (or ↵, or double-click) to edit an update's text in place, or ⌫ to delete it.
+  Change times… adjusts when it was added or last updated.
+
+When the window is too narrow for the drawer, Edit and Add update open their dialogs instead.
 
 ### Tasks
 
@@ -55,10 +76,10 @@ arrow and Page keys; ⌫ clears. Snooze's picker offers the Snooze menu's times 
 ### Updates
 
 Updates record progress on a task: each has the time it was added, the time it was last updated
-and a Markdown text. **Add update** (⇧U) opens the task's updates: write in the editor at the top
-and press ⌘↵ to add it; the editor clears for the next one and the list below shows every
-update, newest first. Tab into the list, move with ↑/↓, press E to edit an update (its text, when
-it was added and when it was last updated) or ⌫ to delete it after confirming. Last updated moves
+and a Markdown text. Add them in the details drawer (above) or from the quick view. Without the
+drawer, **Add update** opens the task's updates in a dialog: write in the editor at the top and
+press ⌘↵ to add it; the list below shows every update, newest first, where E edits an update
+(its text, when it was added and when it was last updated) and ⌫ deletes it. Last updated moves
 to now when you change the text, unless you set it yourself; neither time can be in the future,
 and an update can't be last updated before it was added. Deleting offers Undo.
 

@@ -45,6 +45,34 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		c.toast(text, "default", { id: "undo", label: "Undo" });
 	}
 
+	/**
+	 * A field of the drawer's property sheet. Status moves the task through its lifecycle
+	 * (Snooze asks until when); the rest saves through the same checks as the Edit dialog.
+	 */
+	function editInPlace(task: model.Task, field: string, value: unknown, c: Context, before: Data): boolean {
+		const t = now();
+		if (field === "state") {
+			const to = String(value);
+			if (to === task.state) return false;
+			if (to === "snoozed") {
+				view.dialog = { kind: "snooze", id: task.id, until: defaultSnooze(t) };
+				return false;
+			}
+			if (task.state === "settled") life.unsettle(data, task.id, t);
+			else if (task.state === "snoozed") life.wake(data, task.id, t);
+			if (to === "working" && task.state !== "working") life.startWorking(data, task.id, t);
+			if (to === "inbox" && task.state === "working") life.doneForNow(data, task.id, t);
+			if (to === "settled") (life.settle(data, task.id, t), offerUndo(c, `Settled #${task.id}`, before));
+			return true;
+		}
+		const input = { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } };
+		if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? value : []);
+		else if (field === "name" || field === "due" || field === "desc") input[field] = String(value);
+		else return false;
+		model.updateTask(data, task.id, input, t);
+		return true;
+	}
+
 	/** Returns true when the data changed. */
 	function onEvent(name: string, p: any, c: Context, before: Data): boolean {
 		const dialog = view.dialog;
@@ -91,6 +119,8 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				return true;
 			case "field": {
 				const value = fieldValue(p?.value);
+				// The details drawer edits the task in place: each field saves on its own.
+				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, before);
 				if (p?.form === "show") view.show = value === "archived" ? "archived" : "active";
 				else if (dialog?.kind === "task" && p?.form === "task") {
 					if (p.field === "labels") dialog.draft.labels = fromTagValues(Array.isArray(value) ? value : []);
@@ -171,8 +201,23 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			}
 			// ── updates ──
 			case "add-update":
+				// Written in the drawer's composer or the quick view; otherwise the Updates dialog.
+				if (typeof p?.text === "string") {
+					model.addUpdate(data, rowId(), p.text, t);
+					return true;
+				}
 				view.dialog = { kind: "updates", id: model.findTask(data, rowId()).id, draft: "" };
 				return false;
+			case "edit-update-text": {
+				const { task, update } = updateRef();
+				model.editUpdate(data, task.id, update.id, { text: String(p?.text ?? "") }, t);
+				return true;
+			}
+			case "quick-task": {
+				const task = model.addTask(data, { name: String(p?.text ?? ""), due: "", desc: "", labels: {} }, t);
+				c.toast(`Added #${task.id} to the Inbox`, "success");
+				return true;
+			}
 			case "edit-update": {
 				const { task, update } = updateRef();
 				const fromDrawer = !(dialog?.kind === "updates" && dialog.id === task.id);
