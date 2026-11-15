@@ -157,15 +157,71 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	];
 	const d = m.upgrade1to2(old);
 	expect(d.schema).toBe(2);
-	expect(d.tasks.map((t) => [t.state, t.settledAt])).toEqual([["inbox", undefined], ["settled", 5]]);
+	expect(d.tasks.map((t: m.Task) => [t.state, t.settledAt])).toEqual([["inbox", undefined], ["settled", 5]]);
 	expect(d.order).toEqual({ pinned: [], inbox: [1], working: [] });
-	expect(m.parseData(JSON.parse(JSON.stringify(d)))).toEqual(JSON.parse(JSON.stringify(d)));
 	expect(() => m.upgrade1to2(d)).toThrow(m.InvalidInput);
+	const three = m.upgrade2to3(d);
+	expect(three).toMatchObject({ schema: 3, nextUpdateId: 1 });
+	expect(three.tasks.map((t) => t.updates)).toEqual([[], []]);
+	expect(m.parseData(JSON.parse(JSON.stringify(three)))).toEqual(JSON.parse(JSON.stringify(three)));
+	expect(() => m.upgrade2to3(three)).toThrow(m.InvalidInput);
+});
+
+describe("updates", () => {
+	test("are added as of now, newest first, and bump the task", () => {
+		const d = m.seed();
+		const a = task(d, "a");
+		const first = m.addUpdate(d, a.id, "Started  \n", NOW + 1);
+		const second = m.addUpdate(d, a.id, "**Halfway**", NOW + 2);
+		expect(first).toEqual({ id: 1, added: NOW + 1, updated: NOW + 1, text: "Started" });
+		expect(d.nextUpdateId).toBe(3);
+		expect(a.updated).toBe(NOW + 2);
+		expect(m.updatesOf(a).map((u) => u.id)).toEqual([second.id, first.id]);
+		expect(() => m.addUpdate(d, a.id, "   ", NOW)).toThrow(m.InvalidInput);
+		expect(() => m.addUpdate(d, 99, "x", NOW)).toThrow(m.InvalidInput);
+	});
+	test("editing the text moves last updated; times can be corrected within reason", () => {
+		const d = m.seed();
+		const a = task(d, "a");
+		const u = m.addUpdate(d, a.id, "one", NOW);
+		m.editUpdate(d, a.id, u.id, { text: "one" }, NOW + 10_000);
+		expect(u.updated).toBe(NOW);
+		m.editUpdate(d, a.id, u.id, { text: "two" }, NOW + 20_000);
+		expect(u).toMatchObject({ text: "two", added: NOW, updated: NOW + 20_000 });
+		m.editUpdate(d, a.id, u.id, { text: "two", added: NOW - 86_400_000, updated: NOW - 3_600_000 }, NOW + 30_000);
+		expect(u).toMatchObject({ added: NOW - 86_400_000, updated: NOW - 3_600_000 });
+		// Backdating the start past last updated is fine; moving it after last updated drags that along.
+		m.editUpdate(d, a.id, u.id, { text: "two", added: NOW - 60_000 }, NOW + 40_000);
+		expect(u.updated).toBe(NOW - 60_000);
+		expect(() => m.editUpdate(d, a.id, u.id, { text: "two", added: NOW + 86_400_000 }, NOW)).toThrow("future");
+		expect(() => m.editUpdate(d, a.id, u.id, { text: "two", added: NOW, updated: NOW - 1 }, NOW)).toThrow("before");
+		expect(() => m.editUpdate(d, a.id, u.id, { text: "" }, NOW)).toThrow(m.InvalidInput);
+		expect(() => m.editUpdate(d, a.id, 99, { text: "x" }, NOW)).toThrow(m.InvalidInput);
+	});
+	test("delete removes one update", () => {
+		const d = m.seed();
+		const a = task(d, "a");
+		const [x, y] = [m.addUpdate(d, a.id, "x", NOW), m.addUpdate(d, a.id, "y", NOW)];
+		m.deleteUpdate(d, a.id, x.id, NOW + 5);
+		expect(a.updates).toEqual([y]);
+		expect(a.updated).toBe(NOW + 5);
+		expect(() => m.deleteUpdate(d, a.id, x.id, NOW)).toThrow(m.InvalidInput);
+	});
+	test("datetime field values convert to and from epoch ms", () => {
+		const at = new Date(2026, 10, 14, 9, 30, 42).getTime();
+		expect(m.toLocalInput(at)).toBe("2026-11-14T09:30");
+		expect(m.fromLocalInput("2026-11-14T09:30", at, "Added")).toBe(at);
+		expect(m.fromLocalInput("2026-11-13T08:05", at, "Added")).toBe(new Date(2026, 10, 13, 8, 5).getTime());
+		expect(m.fromLocalInput("2026-11-12", at, "Added")).toBe(new Date(2026, 10, 12, 9, 30).getTime());
+		expect(() => m.fromLocalInput("", at, "Added")).toThrow("Added needs");
+	});
 });
 
 test("parseData rejects other schemas and damaged files", () => {
 	expect(m.parseData(JSON.parse(JSON.stringify(m.seed())))).toEqual(m.seed());
 	expect(() => m.parseData({ schema: 2 })).toThrow(m.InvalidInput);
+	expect(() => m.parseData({ ...m.seed(), nextUpdateId: undefined })).toThrow(m.InvalidInput);
+	expect(() => m.parseData({ ...m.seed(), tasks: [{ id: 1 }] })).toThrow(m.InvalidInput);
 	expect(() => m.parseData({ ...m.seed(), tasks: null })).toThrow(m.InvalidInput);
 	expect(() => m.parseData({ ...m.seed(), order: undefined })).toThrow(m.InvalidInput);
 });

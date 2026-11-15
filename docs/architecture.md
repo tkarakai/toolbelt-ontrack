@@ -18,8 +18,15 @@ The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, wo
 settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each table in a card
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
-Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder` and `ui.modifier-keys`. The
-package is portable JavaScript, uses SDK 0.3.6 and needs Toolbelt 0.3.10 or newer.
+Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
+`ui.timeline` (the Updates dialog). The package is portable JavaScript, uses SDK 0.3.7 and needs
+Toolbelt 0.3.11 or newer.
+
+The Updates dialog (id `updates`, view state `{kind: "updates", id, draft, editing?}`) shows a
+composer form (`update-new`) or the update being edited (`update-edit`) above a `timeline` of
+the task's updates. The composer's field id is `text-<nextUpdateId>`, so after each added update
+it mounts fresh, empty and focused (`autofocus`). Timeline actions arrive with
+`{timeline, entryId}`; the drawer's update items send the same actions with `{rowId, target}`.
 
 ## Code ownership
 
@@ -31,16 +38,19 @@ package is portable JavaScript, uses SDK 0.3.6 and needs Toolbelt 0.3.10 or newe
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 to 2. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 2 is one JSON document: `nextTaskId`, `nextLabelId`, `tasks`, `labels`, `relationTypes`
-and `order` (`pinned`, `inbox`, `working`: task ids in the person's order). IDs are never reused.
+Schema 3 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+`relationTypes` and `order` (`pinned`, `inbox`, `working`: task ids in the person's order). IDs
+are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
+the order written; they are shown newest first by `added`. Adding, editing or deleting one
+changes the task's `updated`.
 A task's `labels` maps label id to its value (`true` for yes/no labels). A label's optional
 `shades` (`strongest-first` or `lightest-first`) gives its listed values a `Tag.shade` in list
-order; absent means one color. It is additive, so schema 2 still holds and older versions keep it. `due` is a local
+order; absent means one color. It was added within schema 2 and older versions keep it. `due` is a local
 wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a time zone. A relation
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
@@ -58,10 +68,11 @@ all its children are settled. Nothing settles automatically. In active mode a ti
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
 
 Each event works on a clone of the data; a rejected change (`InvalidInput`) restores it and shows
-the message in the open dialog or a toast. Settle, snooze, unpin, archive and delete keep the
-previous data for five seconds behind the toast's Undo button. Successful changes are written
+the message in the open dialog or a toast. Settle, snooze, unpin, archive, delete and deleting an update keep
+the previous data for five seconds behind the toast's Undo button. Successful changes are written
 before the event returns, so `prepare` is always ready. Migration upgrades schema 1 (tasks whose
-Status was Done become settled; the rest go to the Inbox in ID order).
+Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task
+gets an empty `updates` list and `nextUpdateId` starts at 1).
 
 ## Tests
 

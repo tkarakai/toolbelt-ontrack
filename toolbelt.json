@@ -9,7 +9,7 @@
   "entry": "index.js",
   "repo": "tkarakai/toolbelt-ontrack",
   "requires": {
-    "host": ">=0.3.10",
+    "host": ">=0.3.11",
     "bun": ">=1.3.0",
     "platforms": [
       "portable"
@@ -24,12 +24,13 @@
       "ui.rich-fields",
       "ui.row-select",
       "ui.row-reorder",
-      "ui.modifier-keys"
+      "ui.modifier-keys",
+      "ui.timeline"
     ],
     "optional": []
   },
   "data": {
-    "schema": 2
+    "schema": 3
   },
   "migration": {
     "entry": "migrate.js"

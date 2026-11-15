@@ -21,8 +21,8 @@ keeps room for a real agent later.
   **Done for now** (D) sends it back to the top of the Inbox, unread, like an agent finishing its
   turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
   9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Pin/Unpin** (P), **Mark
-  read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Relate to…** (R)
-  and **Delete** act on the selected task. Settle, snooze, unpin, archive and delete offer
+  read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Add update**
+  (⇧U), **Relate to…** (R) and **Delete** act on the selected task. Settle, snooze, unpin, archive and delete offer
   **Undo** for five seconds.
 - **Drag** tasks within Pinned, Inbox and Working to order them, or between sections: into Pinned
   pins, into Working starts work, Working → Inbox is Done for now, onto Settled settles, out of
@@ -30,8 +30,9 @@ keeps room for a real agent later.
 - **Unread** tasks are bold with a blue dot and say why: back from Working, the snooze ended, the
   due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
   task marks it read. Nothing settles on its own.
-- Search matches names, descriptions and label values; each label is a toolbar filter. The
-  details drawer shows state, time spent, labels, related tasks and the description.
+- Search matches names, descriptions, updates and label values; each label is a toolbar filter.
+  The details drawer shows state, time spent, labels, related tasks, the description and the
+  updates, newest first, each with its own Edit and Delete.
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
 - The menu-bar **quick view** is a focus list: what you're working on (with elapsed time), then
@@ -43,8 +44,23 @@ keeps room for a real agent later.
 
 A task has an automatic ID, a name, created and last-updated times, an optional due date with an
 optional time (local time; a date alone is due at the end of that day), a Markdown description
-edited with live styling, at most one value per label (edited as colored pills), relations to
-other tasks, and its place in the sections above, including work sessions for time spent.
+edited with live styling, a series of updates, at most one value per label (edited as colored
+pills), relations to other tasks, and its place in the sections above, including work sessions
+for time spent.
+
+Dates use Toolbelt's date picker: type them the way you say them (`fri 5pm`, `+3d`, `next mon`,
+`nov 20`), pick Today, Tomorrow, Next Monday or In a week, or move through the month with the
+arrow and Page keys; ⌫ clears. Snooze's picker offers the Snooze menu's times as quick picks.
+
+### Updates
+
+Updates record progress on a task: each has the time it was added, the time it was last updated
+and a Markdown text. **Add update** (⇧U) opens the task's updates: write in the editor at the top
+and press ⌘↵ to add it; the editor clears for the next one and the list below shows every
+update, newest first. Tab into the list, move with ↑/↓, press E to edit an update (its text, when
+it was added and when it was last updated) or ⌫ to delete it after confirming. Last updated moves
+to now when you change the text, unless you set it yourself; neither time can be in the future,
+and an update can't be last updated before it was added. Deleting offers Undo.
 
 ### Labels
 

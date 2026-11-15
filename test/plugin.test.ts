@@ -12,7 +12,7 @@ afterEach(() => {
 	clock = START;
 });
 
-const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys"];
+const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys", "ui.timeline"];
 
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
@@ -147,7 +147,7 @@ test("Undo restores what settle, archive and delete changed, but only briefly", 
 	await event("field", { form: "show", field: "show", value: "archived" });
 	expect(table().id).toBe("archived");
 	expect(table().sections).toBeUndefined();
-	expect(rows().map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "delete"]]]);
+	expect(rows().map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "add-update", "delete"]]]);
 	await event("unarchive", { rowId: "3" });
 	await event("field", { form: "show", field: "show", value: "active" });
 	expect(bySection().inbox[0]).toBe("Fix login bug");
@@ -222,6 +222,94 @@ test("free-text labels suggest the values other tasks already use", async () => 
 	const keys = tree("screen:tasks").dialog.children[0].fields.find((f: any) => f.id === "labels").keys;
 	expect(keys.find((k: any) => k.label === "Project")).toMatchObject({ values: ["Garden", "Toolbelt"], freeform: true });
 	expect(keys.find((k: any) => k.label === "Priority")).toMatchObject({ values: ["High", "Medium", "Low"], shades: { High: 1, Medium: 0.5, Low: 0 } });
+});
+
+test("updates: add several from the dialog, edit one with its times, delete with Undo", async () => {
+	const { saved, event } = await start(fixture());
+	const dialog = () => tree("screen:tasks").dialog;
+	const composer = () => dialog().children.find((c: any) => c.type === "form");
+	const timeline = () => dialog().children.find((c: any) => c.type === "timeline");
+	expect(rows().find((r) => r.id === "2").actions).toContain("add-update");
+	await event("add-update", { rowId: "2" });
+	expect(dialog()).toMatchObject({ id: "updates", title: "Updates · #2 Reply to Anna" });
+	expect(composer()).toMatchObject({ id: "update-new", fields: [{ type: "textarea", id: "text-1", markdown: true, autofocus: true, value: "" }] });
+	expect(timeline()).toMatchObject({ entries: [], empty: { title: "No updates yet" } });
+	// An empty update is refused in the dialog.
+	await event("save", { dialog: "updates" });
+	expect(dialog().children[0]).toMatchObject({ type: "text", tone: "danger", text: "Write what happened first." });
+	await event("field", { form: "update-new", field: "text-1", value: "Called **Anna**" });
+	await event("save", { dialog: "updates" });
+	clock += 60 * 60_000;
+	// The composer comes back empty under a new id, so it mounts fresh and focused.
+	expect(composer().fields[0]).toMatchObject({ id: "text-2", value: "" });
+	await event("field", { form: "update-new", field: "text-2", value: "Sent the draft" });
+	await event("save", { dialog: "updates" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.text)).toEqual(["Called **Anna**", "Sent the draft"]);
+	expect(timeline().entries.map((e: any) => [e.id, e.text])).toEqual([["2", "Sent the draft"], ["1", "Called **Anna**"]]);
+	expect(timeline().actions.map((a: any) => [a.id, a.key, a.tone])).toEqual([["edit-update", "e", undefined], ["delete-update", undefined, "destructive"]]);
+	// Search finds tasks by their updates.
+	await event("search", { query: "draft" });
+	expect(rows().map((r) => r.id)).toEqual(["2"]);
+	await event("search", { query: "" });
+
+	// E on an entry edits it in place, with both times.
+	await event("edit-update", { timeline: "updates", entryId: "1" });
+	expect(dialog()).toMatchObject({ title: "Edit update · #2 Reply to Anna", actions: [{ id: "update-back" }, { id: "save", label: "Save update" }] });
+	expect(composer().fields.map((f: any) => [f.id, f.type])).toEqual([["edit-text-1", "textarea"], ["edit-added", "datetime"], ["edit-updated", "datetime"]]);
+	expect(composer().fields[1].value).toBe("2026-11-14T12:00");
+	expect(timeline().selected).toBe("1");
+	clock += 60_000;
+	await event("field", { form: "update-edit", field: "edit-text-1", value: "Called Anna twice" });
+	await event("field", { form: "update-edit", field: "edit-added", value: "2026-11-14T09:15" });
+	await event("save", { dialog: "updates" });
+	let first = saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.find((u) => u.id === 1)!;
+	expect(first).toMatchObject({ text: "Called Anna twice", added: new Date(2026, 10, 14, 9, 15).getTime(), updated: clock });
+	expect(composer().id).toBe("update-new");
+	// Times can't run backwards; the error shows in the dialog and nothing changes.
+	await event("edit-update", { timeline: "updates", entryId: "1" });
+	await event("field", { form: "update-edit", field: "edit-updated", value: "2026-11-14T08:00" });
+	await event("save", { dialog: "updates" });
+	expect(dialog().children[0]).toMatchObject({ type: "text", text: "Last updated can't be before it was added." });
+	await event("update-back", { dialog: "updates" });
+	expect(composer().id).toBe("update-new");
+
+	// The drawer shows the updates newest first as Markdown, with their own actions.
+	const details = rows().find((r) => r.id === "2").details;
+	const updates = details.filter((d: any) => d.section === "Updates · 2");
+	expect(updates.map((d: any) => [d.value, d.markdown, d.target])).toEqual([["Sent the draft", true, "2"], ["Called Anna twice", true, "1"]]);
+	expect(updates[1].label).toContain("edited");
+	await event("dialog-close", { dialog: "updates" });
+	// Editing from the drawer closes when saved.
+	await event("edit-update", { rowId: "2", target: "2" });
+	expect(dialog().actions[0]).toMatchObject({ id: "update-back", label: "Discard" });
+	await event("field", { form: "update-edit", field: "edit-text-2", value: "Sent the final draft" });
+	await event("save", { dialog: "updates" });
+	expect(dialog()).toBeUndefined();
+	first = saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.find((u) => u.id === 2)!;
+	expect(first.text).toBe("Sent the final draft");
+
+	// Delete offers Undo.
+	await event("delete-update", { rowId: "2", target: "2" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.id)).toEqual([1]);
+	expect(toasts().at(-1)).toMatchObject({ text: "Deleted an update on #2", action: { id: "undo" } });
+	await event("undo", undefined, "toast");
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.id)).toEqual([1, 2]);
+});
+
+test("the due picker and snooze picker get placeholders and presets; descriptions render as Markdown", async () => {
+	const d = fixture();
+	d.tasks[0]!.desc = "# Plan\n\n- ship";
+	const { event } = await start(d);
+	await event("new-task");
+	const due = tree("screen:tasks").dialog.children[0].fields.find((f: any) => f.id === "due");
+	expect(due).toMatchObject({ type: "datetime", value: "", placeholder: "No due date" });
+	await event("dialog-close", { dialog: "task" });
+	await event("snooze", { rowId: "1" });
+	const until = tree("screen:tasks").dialog.children[0].fields[0];
+	expect(until.presets.map((p: any) => p.label)).toEqual(["3 hours", "This evening", "Tomorrow 9:00", "Next Monday 9:00"]);
+	expect(until.presets[2].value).toBe("2026-11-15T09:00");
+	const desc = rows().find((r) => r.id === "1").details.find((x: any) => x.section === "Description");
+	expect(desc).toMatchObject({ label: "", value: "# Plan\n\n- ship", markdown: true });
 });
 
 test("prepare is always ready because writes are synchronous", async () => {

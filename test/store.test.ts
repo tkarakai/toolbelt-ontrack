@@ -35,7 +35,7 @@ test("migration seeds once and keeps existing data", async () => {
 	const dir = temp();
 	const migrate = async (from: number | null = null) => {
 		const p = Bun.spawn([process.execPath, join(import.meta.dir, "../src/migrate.ts")], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-		p.stdin.write(JSON.stringify({ type: "migrate", transactionId: "t", fromVersion: null, toVersion: "0.0.1", fromSchema: from, toSchema: 2, sourceDir: dir, targetDir: dir }));
+		p.stdin.write(JSON.stringify({ type: "migrate", transactionId: "t", fromVersion: null, toVersion: "0.0.1", fromSchema: from, toSchema: 3, sourceDir: dir, targetDir: dir }));
 		p.stdin.end();
 		expect(await p.exited).toBe(0);
 		return (await new Response(p.stdout).text()).trim().split("\n").map((l) => JSON.parse(l));
@@ -50,9 +50,15 @@ test("migration seeds once and keeps existing data", async () => {
 		expect(second.map((m) => m.text).filter(Boolean)).toEqual(["Existing tasks kept"]);
 		expect(load(dir).tasks[0]!.name).toBe("keep me");
 		// Schema 1 data is upgraded in place.
-		writeFileSync(join(dir, FILE), JSON.stringify({ ...seed(), schema: 1, order: undefined, tasks: [{ id: 1, name: "old", created: 1, updated: 1, desc: "", labels: {}, relations: [] }] }));
-		expect((await migrate(1)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks moved into Inbox and Settled"]);
-		expect(load(dir).tasks[0]).toMatchObject({ name: "old", state: "inbox" });
+		writeFileSync(join(dir, FILE), JSON.stringify({ ...seed(), schema: 1, nextUpdateId: undefined, order: undefined, tasks: [{ id: 1, name: "old", created: 1, updated: 1, desc: "", labels: {}, relations: [] }] }));
+		expect((await migrate(1)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks moved into Inbox and Settled", "Tasks can now have updates"]);
+		expect(load(dir).tasks[0]).toMatchObject({ name: "old", state: "inbox", updates: [] });
+		expect(load(dir).nextUpdateId).toBe(1);
+		// Schema 2 data gets updates.
+		const two = { ...seed(), schema: 2, nextUpdateId: undefined, tasks: [{ ...load(dir).tasks[0], updates: undefined }] };
+		writeFileSync(join(dir, FILE), JSON.stringify(two));
+		expect((await migrate(2)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks can now have updates"]);
+		expect(load(dir)).toMatchObject({ schema: 3, nextUpdateId: 1, tasks: [{ name: "old", state: "inbox", updates: [] }] });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

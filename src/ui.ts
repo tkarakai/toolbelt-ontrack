@@ -2,14 +2,23 @@
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type DetailItem, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
-import { dueAt, formatDue, relationsOf, shadeOf, type Data, type Label, type LabelInput, type Task, type TaskInput } from "./model";
+import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
-	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string };
+	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
+	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
+
+/**
+ * An update being edited in the Updates dialog: its text and times as the fields show them.
+ * `closeAfter`: opened from the details drawer to edit just this one, so saving closes.
+ */
+export type UpdateDraft = { update: number; text: string; added: string; updated: string; closeAfter?: boolean };
+
+export const updateDraft = (u: Update, closeAfter?: boolean): UpdateDraft => ({ update: u.id, text: u.text, added: toLocalInput(u.added), updated: toLocalInput(u.updated), ...(closeAfter && { closeAfter }) });
 
 export type View = {
 	query: string;
@@ -70,6 +79,26 @@ const taskName = (data: Data, id: number) => {
 /** Overdue: past due and not settled. */
 export const isOverdue = (task: Task, now: number) => !!task.due && task.state !== "settled" && dueAt(task.due) < now;
 
+/** "Today", "Tomorrow", "Yesterday", "Fri, Nov 20" or "Fri, Nov 20, 2027", with the time after a dot. */
+export function friendlyDue(due: string, now: number): string {
+	const [day, time] = due.split("T") as [string, string?];
+	const [y, mo, d] = day.split("-").map(Number);
+	const date = new Date(y!, mo! - 1, d!);
+	const today = new Date(now);
+	const days = Math.round((date.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86_400_000);
+	const name =
+		days === 0 ? "Today" : days === 1 ? "Tomorrow" : days === -1 ? "Yesterday" : date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(date.getFullYear() !== today.getFullYear() && { year: "numeric" }) });
+	if (!time) return name;
+	const [h, mi] = time.split(":").map(Number);
+	return `${name} · ${new Date(2000, 0, 1, h, mi).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+/** An update's moment: "Nov 14, 9:30 AM", with the year when it isn't this year's. */
+export function stamp(ms: number, now: number) {
+	const d = new Date(ms);
+	return d.toLocaleString(undefined, { month: "short", day: "numeric", ...(d.getFullYear() !== new Date(now).getFullYear() && { year: "numeric" }), hour: "numeric", minute: "2-digit" });
+}
+
 /** What the plugin badge counts: open tasks that are unread or overdue. */
 export const attention = (data: Data, now: number) => data.tasks.filter((t) => !t.archived && t.state !== "settled" && (t.unread || isOverdue(t, now))).length;
 
@@ -79,7 +108,7 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 		const value = task.labels[id.slice("label:".length)];
 		if (value === undefined || !values.includes(optionValue(value))) return false;
 	}
-	return s.test([`#${task.id}`, task.name, task.desc, ...tags(data, task).map((t) => t.text)]);
+	return s.test([`#${task.id}`, task.name, task.desc, ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
 }
 
 // ── actions ─────────────────────────────────────────────────────────────
@@ -103,6 +132,7 @@ export function taskActions(now: number): Action[] {
 		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
 		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit" },
+		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit" },
 		{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit" },
 		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
 		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
@@ -117,7 +147,7 @@ export function taskActions(now: number): Action[] {
 
 /** The action ids a task offers, from its state. */
 export function actionsFor(data: Data, task: Task): string[] {
-	if (task.archived) return ["unarchive", "edit", "delete"];
+	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
 	const ids: string[] = [];
 	if (task.state === "inbox") ids.push("start");
@@ -125,7 +155,7 @@ export function actionsFor(data: Data, task: Task): string[] {
 	if (task.state === "snoozed") ids.push("wake");
 	if (task.state === "settled") ids.push("unsettle");
 	else ids.push("settle", "snooze", task.pinned ? "unpin" : "pin");
-	ids.push("edit", "relate");
+	ids.push("edit", "add-update", "relate");
 	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
 	if (section === "pinned" || section === "inbox" || section === "working") ids.push("up", "down");
@@ -146,7 +176,7 @@ export const SECTIONS: (Section & { id: SectionId })[] = [
 function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
 	const overdue = isOverdue(task, now);
-	return { text: formatDue(task.due), tone: overdue ? "danger" : undefined, icon: overdue ? "alarm-clock" : undefined };
+	return { text: friendlyDue(task.due, now), tone: overdue ? "danger" : undefined, icon: overdue ? "alarm-clock" : undefined };
 }
 
 /** The moment that matters for the task's section. */
@@ -165,13 +195,13 @@ function taskRow(data: Data, task: Task, now: number): Row {
 	const state: DetailItem[] = [
 		{ section: "Task", label: "ID", value: `#${task.id}`, mono: true, copy: true },
 		...(task.unread && task.unreadReason ? [{ section: "Task", label: "New", value: task.unreadReason, dot: "sky" as const }] : []),
-		...(since ? [{ section: "Task", label: "Working since", value: new Date(since).toLocaleString() }] : []),
-		...(task.snoozedUntil ? [{ section: "Task", label: "Snoozed until", value: new Date(task.snoozedUntil).toLocaleString() }] : []),
-		...(task.settledAt ? [{ section: "Task", label: "Settled", value: new Date(task.settledAt).toLocaleString() }] : []),
+		...(since ? [{ section: "Task", label: "Working since", value: stamp(since, now) }] : []),
+		...(task.snoozedUntil ? [{ section: "Task", label: "Snoozed until", value: stamp(task.snoozedUntil, now) }] : []),
+		...(task.settledAt ? [{ section: "Task", label: "Settled", value: stamp(task.settledAt, now) }] : []),
 		...(worked ? [{ section: "Task", label: "Time spent", value: `${spent(worked)} in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` }] : []),
-		{ section: "Task", label: "Due", value: task.due ? formatDue(task.due) : "No due date", tone: isOverdue(task, now) ? "danger" : undefined },
-		{ section: "Task", label: "Created", value: new Date(task.created).toLocaleString() },
-		{ section: "Task", label: "Last updated", value: new Date(task.updated).toLocaleString() },
+		{ section: "Task", label: "Due", value: task.due ? friendlyDue(task.due, now) : "No due date", tone: isOverdue(task, now) ? "danger" : undefined },
+		{ section: "Task", label: "Created", value: stamp(task.created, now) },
+		{ section: "Task", label: "Last updated", value: stamp(task.updated, now) },
 	];
 	const details: DetailItem[] = [
 		...state,
@@ -179,7 +209,8 @@ function taskRow(data: Data, task: Task, now: number): Row {
 			.filter((l) => task.labels[l.id] !== undefined)
 			.map((l): DetailItem => ({ section: "Labels", label: l.name, value: task.labels[l.id] === true ? "Yes" : String(task.labels[l.id]), dot: l.color })),
 		...relations.map((r): DetailItem => ({ section: "Related tasks", label: r.label, value: taskName(data, r.task) })),
-		...(task.desc.trim() ? [{ section: "Description", label: "Markdown", value: task.desc }] : []),
+		...(task.desc.trim() ? [{ section: "Description", label: "", value: task.desc, markdown: true }] : []),
+		...updateDetails(task, now),
 	];
 	return {
 		id: String(task.id),
@@ -203,6 +234,23 @@ function taskRow(data: Data, task: Task, now: number): Row {
 			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }
 			: undefined,
 	};
+}
+
+/** The task's updates in the drawer, newest first, each with Edit and Delete. */
+function updateDetails(task: Task, now: number): DetailItem[] {
+	const list = updatesOf(task);
+	const section = `Updates · ${list.length}`;
+	return list.map((u) => ({
+		section,
+		label: `${stamp(u.added, now)}${u.updated > u.added + 60_000 ? ` · edited ${stamp(u.updated, now)}` : ""}`,
+		value: u.text,
+		markdown: true,
+		target: String(u.id),
+		actions: [
+			{ id: "edit-update", label: "Edit update", icon: "pencil" },
+			{ id: "delete-update", label: "Delete update", icon: "trash-2", tone: "destructive", confirm: "Delete this update?" },
+		],
+	}));
 }
 
 export function tasksScreen(data: Data, view: View, now: number): Node {
@@ -272,7 +320,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog && ["task", "relate", "snooze"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
+		dialog: view.dialog && ["task", "relate", "snooze", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
@@ -416,7 +464,7 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 						id: "task",
 						fields: [
 							{ type: "text", id: "name", label: "Name", value: d.name, placeholder: "What needs doing" },
-							{ type: "datetime", id: "due", label: "Due", value: d.due, description: "Time is optional." },
+							{ type: "datetime", id: "due", label: "Due", value: d.due, placeholder: "No due date", description: "Optional. Without a time, it's due at the end of the day." },
 							{ type: "tags", id: "labels", label: "Labels", value: toTagValues(d.labels), keys: tagKeys(data) },
 							{ type: "textarea", id: "desc", label: "Description", value: d.desc, markdown: true, rows: 8, placeholder: "Markdown: # heading, **bold**, - list, [link](https://…)" },
 						],
@@ -464,11 +512,25 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 			return {
 				id: "snooze",
 				title: `Snooze ${taskName(data, dialog.id)}`,
-				description: `It comes back to the top of the Inbox, marked unread. ${choices.map((c) => c.label).join(", ")} are also in the Snooze menu.`,
+				description: "It comes back to the top of the Inbox, marked unread.",
 				actions: [{ ...save, label: "Snooze", disabled: !dialog.until }],
 				children: [
 					...error(dialog.error),
-					{ type: "form", id: "snooze", fields: [{ type: "datetime", id: "until", label: "Until", value: dialog.until, description: "A date alone means 9:00 that day." }] },
+					{
+						type: "form",
+						id: "snooze",
+						fields: [
+							{
+								type: "datetime",
+								id: "until",
+								label: "Until",
+								value: dialog.until,
+								placeholder: "Pick when it comes back",
+								presets: choices.map((c) => ({ label: c.label, value: toLocalInput(c.until) })),
+								description: "A date alone means 9:00 that day.",
+							},
+						],
+					},
 				],
 			};
 		}
@@ -510,6 +572,8 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 				],
 			};
 		}
+		case "updates":
+			return updatesDialog(data, dialog);
 		case "relationType":
 			return {
 				id: "relationType",
@@ -528,6 +592,71 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 				],
 			};
 	}
+}
+
+/**
+ * A task's updates: a composer (or the update being edited) above the timeline, newest first.
+ * ⌘↵ adds or saves, E edits the focused update, ⌫ deletes it. The composer's field id changes
+ * with every added update so it mounts fresh, empty and focused.
+ */
+function updatesDialog(data: Data, dialog: Extract<Dialog, { kind: "updates" }>): DialogNode {
+	const task = data.tasks.find((t) => t.id === dialog.id);
+	const list = task ? updatesOf(task) : [];
+	const e = dialog.editing;
+	const form: Node = e
+		? {
+				type: "form",
+				id: "update-edit",
+				fields: [
+					{ type: "textarea", id: `edit-text-${e.update}`, label: "Update", value: e.text, markdown: true, rows: 5, autofocus: true },
+					{ type: "datetime", id: "edit-added", label: "Added", value: e.added, placeholder: "Pick a date and time" },
+					{ type: "datetime", id: "edit-updated", label: "Last updated", value: e.updated, placeholder: "Pick a date and time", description: "Moves to now by itself when you change the text, unless you set it here." },
+				],
+			}
+		: {
+				type: "form",
+				id: "update-new",
+				fields: [
+					{
+						type: "textarea",
+						id: `text-${data.nextUpdateId}`,
+						label: "Update",
+						value: dialog.draft,
+						markdown: true,
+						rows: 4,
+						autofocus: true,
+						placeholder: "What changed? Markdown works: **bold**, - lists, [links](https://…)",
+					},
+				],
+			};
+	return {
+		id: "updates",
+		title: e ? `Edit update · ${taskName(data, dialog.id)}` : `Updates · ${taskName(data, dialog.id)}`,
+		description: e ? undefined : "Newest first. ⌘↵ adds it. Tab to the list, then E edits and ⌫ deletes.",
+		wide: true,
+		resizable: true,
+		actions: e
+			? [
+					{ id: "update-back", label: e.closeAfter ? "Discard" : "Back to updates", icon: "arrow-left" },
+					{ id: "save", label: "Save update", primary: true },
+				]
+			: [{ id: "save", label: "Add update", primary: true, icon: "message-square-plus" }],
+		children: [
+			...error(dialog.error),
+			form,
+			{
+				type: "timeline",
+				id: "updates",
+				entries: list.map((u) => ({ id: String(u.id), at: u.added, edited: u.updated, text: u.text })),
+				actions: [
+					{ id: "edit-update", label: "Edit", icon: "pencil", key: "e" },
+					{ id: "delete-update", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this update?" },
+				],
+				selected: e ? String(e.update) : undefined,
+				empty: { title: "No updates yet", description: "Record progress as it happens. The newest update comes first.", icon: "history" },
+			},
+		],
+	};
 }
 
 // ── quick view ──────────────────────────────────────────────────────────

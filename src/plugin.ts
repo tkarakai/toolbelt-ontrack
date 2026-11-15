@@ -5,7 +5,7 @@ import type { Context, PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, settingsScreen, tasksScreen, type View } from "./ui";
+import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, settingsScreen, tasksScreen, updateDraft, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
@@ -51,6 +51,12 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		const rowId = () => Number(String(p?.rowId ?? "").replace(/^[lr]/, ""));
 		const t = now();
 		const name2 = (id: number) => `#${id}`;
+		/** The task and update an update action is about: from the timeline or a drawer item. */
+		const updateRef = () => {
+			const taskId = p?.timeline && dialog?.kind === "updates" ? dialog.id : rowId();
+			const task = model.findTask(data, taskId);
+			return { task, update: model.findUpdate(task, Number(p?.entryId ?? p?.target)) };
+		};
 		if (name.startsWith("snooze:")) {
 			const choice = life.snoozeChoices(t).find((x) => `snooze:${x.id}` === name);
 			if (!choice) throw new InvalidInput("That snooze time has passed.");
@@ -101,6 +107,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					if (p.field === "freeform") d.freeform = value === true;
 				} else if (dialog?.kind === "relationType" && p?.form === "relationType") {
 					if (p.field === "name" || p.field === "inverse") dialog[p.field as "name"] = String(value);
+				} else if (dialog?.kind === "updates" && p?.form === "update-new") {
+					dialog.draft = String(value);
+				} else if (dialog?.kind === "updates" && dialog.editing && p?.form === "update-edit") {
+					const field = String(p.field);
+					if (field.startsWith("edit-text")) dialog.editing.text = String(value);
+					if (field === "edit-added") dialog.editing.added = String(value);
+					if (field === "edit-updated") dialog.editing.updated = String(value);
 				}
 				return false;
 			}
@@ -156,6 +169,29 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				view.dialog = { kind: "task", id: task.id, draft: { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } } };
 				return false;
 			}
+			// ── updates ──
+			case "add-update":
+				view.dialog = { kind: "updates", id: model.findTask(data, rowId()).id, draft: "" };
+				return false;
+			case "edit-update": {
+				const { task, update } = updateRef();
+				const fromDrawer = !(dialog?.kind === "updates" && dialog.id === task.id);
+				view.dialog = { kind: "updates", id: task.id, draft: dialog?.kind === "updates" ? dialog.draft : "", editing: updateDraft(update, fromDrawer) };
+				return false;
+			}
+			case "update-back":
+				if (dialog?.kind !== "updates") return false;
+				if (dialog.editing?.closeAfter) view.dialog = undefined;
+				else view.dialog = { kind: "updates", id: dialog.id, draft: dialog.draft };
+				return false;
+			case "delete-update": {
+				const { task, update } = updateRef();
+				model.deleteUpdate(data, task.id, update.id, t);
+				// Deleting the update being edited goes back to the list.
+				if (dialog?.kind === "updates" && dialog.editing?.update === update.id) view.dialog = { kind: "updates", id: dialog.id, draft: dialog.draft };
+				offerUndo(c, `Deleted an update on ${name2(task.id)}`, before);
+				return true;
+			}
 			case "relate":
 				view.dialog = { kind: "relate", from: model.findTask(data, rowId()).id, type: data.relationTypes[0]?.id ?? "", to: "" };
 				return false;
@@ -203,12 +239,27 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					const due = model.parseDue(dialog.until) ?? "";
 					if (!due) throw new InvalidInput("Choose when it should come back.");
 					life.snooze(data, dialog.id, model.dueAt(due.includes("T") ? due : `${due}T09:00`), t);
+				} else if (dialog.kind === "updates") {
+					const e = dialog.editing;
+					if (!e) {
+						model.addUpdate(data, dialog.id, dialog.draft, t);
+						// Stay for the next one: the composer comes back empty (a new field id) and focused.
+						view.dialog = { kind: "updates", id: dialog.id, draft: "" };
+						return true;
+					}
+					const was = model.findUpdate(model.findTask(data, dialog.id), e.update);
+					const added = model.fromLocalInput(e.added, was.added, "Added");
+					// Last updated follows the text unless the person set it.
+					const setUpdated = e.updated !== model.toLocalInput(was.updated);
+					model.editUpdate(data, dialog.id, e.update, { text: e.text, added, ...(setUpdated && { updated: model.fromLocalInput(e.updated, was.updated, "Last updated") }) }, t);
+					view.dialog = e.closeAfter ? undefined : { kind: "updates", id: dialog.id, draft: dialog.draft };
+					return true;
 				} else if (dialog.kind === "label") {
 					const d = dialog.draft;
 					const input = { ...d, type: d.type as LabelType, values: d.values.split(",") };
 					if (dialog.id) model.updateLabel(data, dialog.id, input, t);
 					else model.addLabel(data, input);
-				} else {
+				} else if (dialog.kind === "relationType") {
 					model.saveRelationType(data, { id: dialog.id, name: dialog.name, inverse: dialog.inverse });
 				}
 				view.dialog = undefined;

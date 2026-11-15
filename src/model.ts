@@ -2,7 +2,7 @@
 // so every rule is testable on plain objects.
 import { HUES, type Hue } from "@toolbelt/sdk";
 
-export const SCHEMA = 2;
+export const SCHEMA = 3;
 
 export type LabelType = "string" | "bool";
 
@@ -46,6 +46,12 @@ export type TaskState = "inbox" | "working" | "snoozed" | "settled";
 /** A stretch of work on a task, by whoever worked on it ("me" now; an agent later). */
 export type Session = { start: number; end?: number; by: string };
 
+/**
+ * A progress note on a task: what happened, in Markdown. `added` and `updated` are epoch ms;
+ * both can be corrected by hand, and `updated` moves on by itself when the text changes.
+ */
+export type Update = { id: number; added: number; updated: number; text: string };
+
 export type Task = {
 	id: number;
 	name: string;
@@ -75,6 +81,8 @@ export type Task = {
 	/** The `due` value whose arrival was already announced, so it's announced once. */
 	dueAnnounced?: string;
 	sessions: Session[];
+	/** Progress notes, in the order they were written (shown newest first). */
+	updates: Update[];
 };
 
 /** The person's order of the sections they arrange; ids not listed go last. */
@@ -84,6 +92,7 @@ export type Data = {
 	schema: typeof SCHEMA;
 	nextTaskId: number;
 	nextLabelId: number;
+	nextUpdateId: number;
 	tasks: Task[];
 	labels: Label[];
 	relationTypes: RelationType[];
@@ -108,6 +117,7 @@ export function seed(): Data {
 		schema: SCHEMA,
 		nextTaskId: 1,
 		nextLabelId: labels.length + 1,
+		nextUpdateId: 1,
 		tasks: [],
 		labels,
 		relationTypes: [
@@ -146,7 +156,6 @@ export function dueAt(due: string): number {
 	return new Date(y!, mo! - 1, d!, h, mi).getTime();
 }
 
-export const formatDue = (due: string) => due.replace("T", " ");
 
 // ── labels ──────────────────────────────────────────────────────────────
 
@@ -242,6 +251,7 @@ export function addTask(data: Data, input: TaskInput, now: number): Task {
 		archived: false,
 		unread: false,
 		sessions: [],
+		updates: [],
 	};
 	if (task.due === undefined) delete task.due;
 	data.tasks.push(task);
@@ -275,6 +285,72 @@ export function deleteTask(data: Data, id: number, now: number) {
 }
 
 export const findTask = (data: Data, id: number) => data.tasks.find((t) => t.id === id) ?? fail(`Task #${id} no longer exists.`);
+
+// ── updates ─────────────────────────────────────────────────────────────
+
+/** A minute's grace for clocks and for times picked to the minute. */
+const SKEW = 60_000;
+
+const checkText = (text: string) => (text.trim() ? text.replace(/\s+$/, "") : fail("Write what happened first."));
+
+/** Adds a progress note to a task, as of now. */
+export function addUpdate(data: Data, taskId: number, text: string, now: number): Update {
+	const task = findTask(data, taskId);
+	const update: Update = { id: data.nextUpdateId++, added: now, updated: now, text: checkText(text) };
+	task.updates.push(update);
+	task.updated = now;
+	return update;
+}
+
+export const findUpdate = (task: Task, id: number) => task.updates.find((u) => u.id === id) ?? fail("That update no longer exists.");
+
+/**
+ * Edits a note. `added`/`updated` correct its times; left out, `added` stays and `updated`
+ * becomes now when the text changed. Neither can be in the future, nor last updated before added.
+ */
+export function editUpdate(data: Data, taskId: number, id: number, input: { text: string; added?: number; updated?: number }, now: number): Update {
+	const task = findTask(data, taskId);
+	const update = findUpdate(task, id);
+	const text = checkText(input.text);
+	const added = input.added ?? update.added;
+	const updated = input.updated ?? (text !== update.text ? now : Math.max(update.updated, added));
+	if (added > now + SKEW || updated > now + SKEW) fail("An update can't be from the future.");
+	if (updated < added) fail("Last updated can't be before it was added.");
+	Object.assign(update, { text, added, updated });
+	task.updated = now;
+	return update;
+}
+
+export function deleteUpdate(data: Data, taskId: number, id: number, now: number) {
+	const task = findTask(data, taskId);
+	findUpdate(task, id);
+	task.updates = task.updates.filter((u) => u.id !== id);
+	task.updated = now;
+}
+
+/** Newest first: by when they were added, then by when they were written. */
+export const updatesOf = (task: Task) => [...task.updates].sort((a, b) => b.added - a.added || b.id - a.id);
+
+/** Epoch ms → the local `YYYY-MM-DDTHH:MM` a datetime field shows. */
+export function toLocalInput(ms: number) {
+	const d = new Date(ms);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * A datetime field's value → epoch ms. Unchanged (`was` shows the same minute) keeps `was`
+ * exactly; a date alone keeps `was`'s time of day. Blank is refused: `what` names the field.
+ */
+export function fromLocalInput(value: string, was: number, what: string): number {
+	if (value === toLocalInput(was)) return was;
+	const local = parseDue(value) ?? fail(`${what} needs a date and time.`);
+	const [day, time] = local.split("T");
+	const [y, mo, d] = day!.split("-").map(Number);
+	const at = new Date(was);
+	const [h, mi] = time ? time.split(":").map(Number) : [at.getHours(), at.getMinutes()];
+	return new Date(y!, mo! - 1, d!, h, mi).getTime();
+}
 
 // ── relations ───────────────────────────────────────────────────────────
 
@@ -362,7 +438,8 @@ export function parseData(value: unknown): Data {
 	const d = value as Data;
 	if (!d || typeof d !== "object" || d.schema !== SCHEMA) fail(`Unsupported data schema ${String((d as Data | undefined)?.schema)}.`);
 	if (!Array.isArray(d.tasks) || !Array.isArray(d.labels) || !Array.isArray(d.relationTypes)) fail("The data file is damaged.");
-	if (!Number.isInteger(d.nextTaskId) || !Number.isInteger(d.nextLabelId)) fail("The data file is damaged.");
+	if (!Number.isInteger(d.nextTaskId) || !Number.isInteger(d.nextLabelId) || !Number.isInteger(d.nextUpdateId)) fail("The data file is damaged.");
+	if (d.tasks.some((t) => !Array.isArray(t?.updates))) fail("The data file is damaged.");
 	if (!d.order || !Array.isArray(d.order.pinned) || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	return d;
 }
@@ -371,18 +448,24 @@ export function parseData(value: unknown): Data {
  * Schema 1 → 2: tasks get a lifecycle. Tasks whose Status was Done become settled (Settled now
  * means done); everything else waits in the Inbox in ID order, nothing pinned or unread.
  */
-export function upgrade1to2(old: any): Data {
+export function upgrade1to2(old: any): any {
 	if (!old || old.schema !== 1 || !Array.isArray(old.tasks)) fail("Expected schema 1 data.");
 	const status = (old.labels as Label[]).find((l) => l.name.toLowerCase() === "status");
-	const tasks: Task[] = (old.tasks as Task[]).map((t) => {
+	const tasks: Omit<Task, "updates">[] = (old.tasks as Task[]).map((t) => {
 		const value = status ? t.labels[status.id] : undefined;
 		const done = typeof value === "string" && value.toLowerCase() === "done";
 		return { ...t, state: done ? "settled" : "inbox", ...(done && { settledAt: t.updated }), pinned: false, archived: false, unread: false, sessions: [] };
 	});
 	return {
 		...old,
-		schema: SCHEMA,
+		schema: 2,
 		tasks,
 		order: { pinned: [], inbox: tasks.filter((t) => t.state === "inbox").map((t) => t.id), working: [] },
 	};
+}
+
+/** Schema 2 → 3: tasks get progress notes (updates), none yet. */
+export function upgrade2to3(old: any): Data {
+	if (!old || old.schema !== 2 || !Array.isArray(old.tasks)) fail("Expected schema 2 data.");
+	return { ...old, schema: SCHEMA, nextUpdateId: 1, tasks: old.tasks.map((t: Task) => ({ ...t, updates: [] })) };
 }
