@@ -5,6 +5,7 @@
 - N creates a new task (shown on the New task button). The Name field has focus when a task dialog opens, Return saves, and ⌘Return saves from the description too.
 - The Labels tab is now **Settings** (⌘S), with New label above the labels table and New relation type above the relation types table.
 - A label can shade its listed values from strongest to lightest (or the reverse) in its color, for example High · Medium · Low. Priority does this on fresh installs.
+- Requires Toolbelt 0.3.10 (SDK 0.3.6).
 - Free-text labels such as Project suggest the values your other tasks already use.
 
 ## 0.1.0 — 2026-11-15

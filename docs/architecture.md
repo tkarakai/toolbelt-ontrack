@@ -19,7 +19,7 @@ settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each 
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder` and `ui.modifier-keys`. The
-package is portable JavaScript, uses SDK 0.3.5 and needs Toolbelt 0.3.9 or newer.
+package is portable JavaScript, uses SDK 0.3.6 and needs Toolbelt 0.3.10 or newer.
 
 ## Code ownership
 
