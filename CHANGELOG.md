@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Edit tasks right in the details drawer, without a dialog. The drawer is redesigned to be dense and to show each thing once: a bar of action icons, the name in large type (click it or press E to rename), Status, Due and Labels as quiet properties you change in place, the description as formatted text that becomes an editor when you click it, one line of facts (ID, time worked, created, changed), related tasks, and the updates.
+- Write updates in the drawer: ↵ on a task (or ⇧U) goes straight to the update box; ⌘↵ adds the update and the box is ready for the next one. Edit an update's text in place with E, ↵ or a double-click; Change times… adjusts its times. Return no longer starts or stops work; use W and D.
+- → on a task moves into its details (opening the drawer if needed), and Esc comes back to the list. The arrow keys keep the keyboard in the list, so ← / → and Tab no longer switch screens after you've moved through the tasks.
+- The quick view does more without opening the window: jot a new task into the Inbox (N), add an update to a task (U), snooze it until tomorrow (Z), and see each task's latest update.
+- Requires Toolbelt 0.3.12 (SDK 0.3.8).
 
 ## 0.3.0 — 2026-11-15
 - Tasks have **updates**: a series of Markdown notes, each with when it was added and when it was last updated. Add update (⇧U) opens the task's updates with an editor on top (⌘Return adds, and the editor is ready for the next one) and every update below, newest first. Tab into the list, use ↑/↓, E to edit an update (its text and both times) and ⌫ to delete it; deleting can be undone. The details drawer lists the updates with their own Edit and Delete buttons, and search finds tasks by their updates.

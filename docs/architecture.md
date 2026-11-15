@@ -19,14 +19,28 @@ settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each 
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
-`ui.timeline` (the Updates dialog). The package is portable JavaScript, uses SDK 0.3.7 and needs
-Toolbelt 0.3.11 or newer.
+`ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer) and `ui.composer`
+(update boxes, the quick view's New task line and its Add update prompt). The package is portable
+JavaScript, uses SDK 0.3.8 and needs Toolbelt 0.3.12 or newer.
+
+Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
+heading, status, due, labels, description), a facts line, a Related section and an Updates
+section with the `update` composer and an editable `updates` timeline. Pane events carry
+`rowId`; `editInPlace` in `src/plugin.ts` applies form fields (status runs the lifecycle; Snooze
+opens the snooze dialog), `add-update` with `text` adds an update, and `edit-update-text` edits
+one. The table's `enter` is `add-update`, whose `focus` is the composer; `edit` focuses the name.
+Both open their dialogs when the host sends them instead (the window too narrow for the drawer).
 
 The Updates dialog (id `updates`, view state `{kind: "updates", id, draft, editing?}`) shows a
 composer form (`update-new`) or the update being edited (`update-edit`) above a `timeline` of
 the task's updates. The composer's field id is `text-<nextUpdateId>`, so after each added update
 it mounts fresh, empty and focused (`autofocus`). Timeline actions arrive with
-`{timeline, entryId}`; the drawer's update items send the same actions with `{rowId, target}`.
+`{timeline, entryId}`; in the drawer they carry `rowId` instead of a dialog. The dialog remains
+for narrow windows and for Change times…, which opens it on one update (`closeAfter`).
+
+The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
+`focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z) and the
+lifecycle actions.
 
 ## Code ownership
 

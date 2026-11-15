@@ -1,6 +1,6 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { HUES, search, type Action, type Cell, type DetailItem, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update } from "./model";
 
@@ -131,8 +131,9 @@ export function taskActions(now: number): Action[] {
 		},
 		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
 		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
-		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit" },
-		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit" },
+		// Both go into the details drawer when it's showing; otherwise they open a dialog.
+		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
+		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
 		{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit" },
 		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
 		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
@@ -190,28 +191,6 @@ function whenCell(task: Task): Cell {
 
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
-	const since = workingSince(task);
-	const worked = timeSpent(task, now);
-	const state: DetailItem[] = [
-		{ section: "Task", label: "ID", value: `#${task.id}`, mono: true, copy: true },
-		...(task.unread && task.unreadReason ? [{ section: "Task", label: "New", value: task.unreadReason, dot: "sky" as const }] : []),
-		...(since ? [{ section: "Task", label: "Working since", value: stamp(since, now) }] : []),
-		...(task.snoozedUntil ? [{ section: "Task", label: "Snoozed until", value: stamp(task.snoozedUntil, now) }] : []),
-		...(task.settledAt ? [{ section: "Task", label: "Settled", value: stamp(task.settledAt, now) }] : []),
-		...(worked ? [{ section: "Task", label: "Time spent", value: `${spent(worked)} in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` }] : []),
-		{ section: "Task", label: "Due", value: task.due ? friendlyDue(task.due, now) : "No due date", tone: isOverdue(task, now) ? "danger" : undefined },
-		{ section: "Task", label: "Created", value: stamp(task.created, now) },
-		{ section: "Task", label: "Last updated", value: stamp(task.updated, now) },
-	];
-	const details: DetailItem[] = [
-		...state,
-		...data.labels
-			.filter((l) => task.labels[l.id] !== undefined)
-			.map((l): DetailItem => ({ section: "Labels", label: l.name, value: task.labels[l.id] === true ? "Yes" : String(task.labels[l.id]), dot: l.color })),
-		...relations.map((r): DetailItem => ({ section: "Related tasks", label: r.label, value: taskName(data, r.task) })),
-		...(task.desc.trim() ? [{ section: "Description", label: "", value: task.desc, markdown: true }] : []),
-		...updateDetails(task, now),
-	];
 	return {
 		id: String(task.id),
 		group: task.archived ? undefined : sectionOf(task),
@@ -228,7 +207,7 @@ function taskRow(data: Data, task: Task, now: number): Row {
 			due: dueCell(task, now),
 			when: whenCell(task),
 		},
-		details,
+		pane: taskPane(data, task, now),
 		actions: actionsFor(data, task),
 		targets: relations.length
 			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }
@@ -236,21 +215,86 @@ function taskRow(data: Data, task: Task, now: number): Row {
 	};
 }
 
-/** The task's updates in the drawer, newest first, each with Edit and Delete. */
-function updateDetails(task: Task, now: number): DetailItem[] {
-	const list = updatesOf(task);
-	const section = `Updates · ${list.length}`;
-	return list.map((u) => ({
-		section,
-		label: `${stamp(u.added, now)}${u.updated > u.added + 60_000 ? ` · edited ${stamp(u.updated, now)}` : ""}`,
-		value: u.text,
-		markdown: true,
-		target: String(u.id),
-		actions: [
-			{ id: "edit-update", label: "Edit update", icon: "pencil" },
-			{ id: "delete-update", label: "Delete update", icon: "trash-2", tone: "destructive", confirm: "Delete this update?" },
-		],
-	}));
+/** The status picker's choices: where the task is now (with its moment), and where it can go. */
+function statusOptions(task: Task, now: number) {
+	const since = workingSince(task);
+	const at = (ms: number) => stamp(ms, now);
+	return [
+		{ value: "inbox", label: "Inbox" },
+		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
+		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
+		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
+	];
+}
+
+/** One quiet line of facts under the properties: id, pin, time spent, when it was made and changed. */
+function factsLine(task: Task, now: number) {
+	const worked = timeSpent(task, now);
+	return [
+		`#${task.id}`,
+		task.archived ? "Archived" : task.pinned ? "Pinned" : undefined,
+		worked ? `${spent(worked)} worked in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` : undefined,
+		`Created ${stamp(task.created, now)}`,
+		task.updated - task.created > 60_000 ? `changed ${stamp(task.updated, now)}` : undefined,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+/**
+ * The task's details drawer, edited in place: its name, status, due date, labels and description
+ * as a property sheet, then relations, then updates with a composer on top (↵ on the task lands
+ * there). Each field saves on its own; nothing is repeated from elsewhere in the drawer.
+ */
+export function taskPane(data: Data, task: Task, now: number): Node[] {
+	const relations = relationsOf(data, task.id);
+	const updates = updatesOf(task);
+	return [
+		...(task.unread && task.unreadReason ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
+		{
+			type: "form",
+			id: "task",
+			appearance: "inline",
+			fields: [
+				{ type: "text", id: "name", label: "Name", value: task.name, heading: true, placeholder: "What needs doing" },
+				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Status", value: task.state, options: statusOptions(task, now) }]),
+				{ type: "datetime", id: "due", label: isOverdue(task, now) ? "Overdue" : "Due", value: task.due ?? "", placeholder: "No due date" },
+				{ type: "tags", id: "labels", label: "Labels", value: toTagValues(task.labels), keys: tagKeys(data) },
+				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
+			],
+		},
+		{ type: "text", text: factsLine(task, now), tone: "muted" },
+		...(relations.length
+			? [
+					{
+						type: "card" as const,
+						id: "related",
+						title: `Related · ${relations.length}`,
+						actions: [{ id: "relate", label: "Relate to…", icon: "plus" }],
+						children: [{ type: "details" as const, items: relations.map((r) => ({ label: r.label, value: taskName(data, r.task) })) }],
+					},
+				]
+			: []),
+		{
+			type: "card",
+			id: "updates",
+			title: updates.length ? `Updates · ${updates.length}` : "Updates",
+			children: [
+				{ type: "composer", id: "update", placeholder: "Add an update… Markdown works", action: { id: "add-update", label: "Add update", icon: "send-horizontal" } },
+				{
+					type: "timeline",
+					id: "updates",
+					entries: updates.map((u) => ({ id: String(u.id), at: u.added, edited: u.updated, text: u.text })),
+					edit: { id: "edit-update-text", label: "Edit", icon: "pencil", key: "e" },
+					actions: [
+						{ id: "edit-update", label: "Change times…", icon: "clock" },
+						{ id: "delete-update", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this update?" },
+					],
+					empty: { title: "No updates yet", description: "Press ↵ on a task to write one.", icon: "history" },
+				},
+			],
+		},
+	];
 }
 
 export function tasksScreen(data: Data, view: View, now: number): Node {
@@ -311,6 +355,8 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				appearance: "document",
 				...(archived ? {} : { sections: SECTIONS, reorder: true }),
 				selectEvents: true,
+				// ↵ on a task writes an update in its drawer.
+				enter: "add-update",
 				rows: shown.map((t) => taskRow(data, t, now)),
 				actions: taskActions(now),
 				empty: archived
@@ -661,18 +707,32 @@ function updatesDialog(data: Data, dialog: Extract<Dialog, { kind: "updates" }>)
 
 // ── quick view ──────────────────────────────────────────────────────────
 
+/** The update's first line, for a list's second line. */
+const latestUpdate = (t: Task) => {
+	const u = updatesOf(t)[0];
+	return u ? snippet(u.text) : undefined;
+};
+
 /**
- * The menu-bar focus list: what you're working on, then Pinned and the Inbox in your order.
- * Unread tasks are bold; overdue ones get a red dot. Enter opens the task in the main window.
+ * The menu-bar quick view: a line to jot a new task into the Inbox (N), then what you're working
+ * on, Pinned and the Inbox in your order. Each task can be started, stopped, settled, snoozed
+ * until tomorrow, or given an update (U) without opening the window; ↵ opens it there.
+ * Unread tasks are bold; overdue ones get a red dot.
  */
 export function quickView(data: Data, now: number): Node {
 	const working = inSection(data, "working");
 	const pinnedWorking = inSection(data, "pinned").filter((t) => t.state === "working");
 	const waiting = [...inSection(data, "pinned").filter((t) => t.state !== "working"), ...inSection(data, "inbox")];
+	const later = {
+		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
+		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
+		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
+	};
 	const item = (t: Task) => {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
-		const subtitle = since ? [`Working · ${spent(now - since)}`, labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || labels || undefined;
+		const note = latestUpdate(t);
+		const subtitle = since ? [`Working · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
@@ -682,14 +742,21 @@ export function quickView(data: Data, now: number): Node {
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
-				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, { id: "settle", label: "Settle", icon: "check", key: "s" }]
-				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, { id: "settle", label: "Settle", icon: "check", key: "s" }],
+				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, later.update, later.settle]
+				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, later.update, later.snooze, later.settle],
 		};
 	};
 	return {
-		type: "list",
-		id: "focus",
-		items: [...pinnedWorking, ...working, ...waiting].slice(0, 15).map(item),
-		empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
+		type: "stack",
+		gap: 2,
+		children: [
+			{ type: "composer", id: "quick-task", single: true, key: "n", placeholder: "New task… ↵ adds it to the Inbox", action: { id: "quick-task", label: "New task", icon: "plus" } },
+			{
+				type: "list",
+				id: "focus",
+				items: [...pinnedWorking, ...working, ...waiting].slice(0, 15).map(item),
+				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
+			},
+		],
 	};
 }

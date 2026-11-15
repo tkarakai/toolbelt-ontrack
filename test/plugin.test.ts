@@ -12,7 +12,7 @@ afterEach(() => {
 	clock = START;
 });
 
-const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys", "ui.timeline"];
+const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys", "ui.timeline", "ui.row-pane", "ui.composer"];
 
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
@@ -42,6 +42,13 @@ const tree = (surface: string): any =>
 	(host!.messages.filter((m): m is Extract<PluginMessage, { type: "render" }> => m.type === "render" && m.surface === surface).at(-1) as any)?.tree as Node;
 const table = () => tree("screen:tasks").children[0];
 const rows = () => table().rows as any[];
+/** The quick view's task list, under its New task line. */
+const quickList = () => tree("quick").children[1];
+/** A node of a row's details pane, by id (inside its sections too). */
+const paneNode = (rowId: string, id: string): any => {
+	const find = (nodes: any[]): any => nodes.map((n) => (n.id === id ? n : n.children ? find(n.children) : undefined)).find(Boolean);
+	return find(rows().find((r) => r.id === rowId).pane);
+};
 const bySection = () => Object.fromEntries(table().sections.map((s: any) => [s.id, rows().filter((r) => r.group === s.id).map((r) => r.cells.name.text)]));
 const lastBadge = () => host!.messages.filter((m) => m.type === "badge").at(-1);
 const toasts = () => host!.messages.filter((m: any) => m.type === "toast") as any[];
@@ -85,14 +92,15 @@ test("start working, done for now, unread until opened", async () => {
 	await event("start", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
-	expect(tree("quick").items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working · under a minute" });
+	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working · under a minute" });
 	clock += 25 * 60_000;
 	await event("done", { rowId: "2" });
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
 	const row = rows().find((r) => r.id === "2");
 	expect(row).toMatchObject({ unread: true });
 	expect(row.cells.name.sub).toBe("Back from Working");
-	expect(row.details.find((d: any) => d.label === "Time spent").value).toBe("25m in 1 session");
+	expect(row.pane.find((n: any) => n.tone === "muted").text).toContain("25m worked in 1 session");
+	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working", tone: "info" });
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 	await event("select", { table: "tasks", rowId: "2" });
 	expect(rows().find((r) => r.id === "2").unread).toBeUndefined();
@@ -273,11 +281,10 @@ test("updates: add several from the dialog, edit one with its times, delete with
 	await event("update-back", { dialog: "updates" });
 	expect(composer().id).toBe("update-new");
 
-	// The drawer shows the updates newest first as Markdown, with their own actions.
-	const details = rows().find((r) => r.id === "2").details;
-	const updates = details.filter((d: any) => d.section === "Updates · 2");
-	expect(updates.map((d: any) => [d.value, d.markdown, d.target])).toEqual([["Sent the draft", true, "2"], ["Called Anna twice", true, "1"]]);
-	expect(updates[1].label).toContain("edited");
+	// The drawer shows the updates newest first, under a composer.
+	const drawerUpdates = paneNode("2", "updates").children[1];
+	expect(drawerUpdates.entries.map((e: any) => [e.id, e.text])).toEqual([["2", "Sent the draft"], ["1", "Called Anna twice"]]);
+	expect(paneNode("2", "updates").title).toBe("Updates · 2");
 	await event("dialog-close", { dialog: "updates" });
 	// Editing from the drawer closes when saved.
 	await event("edit-update", { rowId: "2", target: "2" });
@@ -308,8 +315,8 @@ test("the due picker and snooze picker get placeholders and presets; description
 	const until = tree("screen:tasks").dialog.children[0].fields[0];
 	expect(until.presets.map((p: any) => p.label)).toEqual(["3 hours", "This evening", "Tomorrow 9:00", "Next Monday 9:00"]);
 	expect(until.presets[2].value).toBe("2026-11-15T09:00");
-	const desc = rows().find((r) => r.id === "1").details.find((x: any) => x.section === "Description");
-	expect(desc).toMatchObject({ label: "", value: "# Plan\n\n- ship", markdown: true });
+	const desc = paneNode("1", "task").fields.find((f: any) => f.id === "desc");
+	expect(desc).toMatchObject({ type: "textarea", label: "", value: "# Plan\n\n- ship", markdown: true });
 });
 
 test("prepare is always ready because writes are synchronous", async () => {
@@ -317,4 +324,64 @@ test("prepare is always ready because writes are synchronous", async () => {
 	host!.send({ type: "prepare", requestId: "p", reason: "upgrade" });
 	await until(() => host!.messages.some((m) => m.type === "prepared"));
 	expect(host!.messages.find((m) => m.type === "prepared")).toEqual({ type: "prepared", requestId: "p", ready: true });
+});
+
+test("the drawer edits a task in place: name, status, due, labels, description, updates", async () => {
+	const { event, saved } = await start(fixture());
+	const form = () => paneNode("1", "task");
+	expect(form()).toMatchObject({ type: "form", appearance: "inline" });
+	expect(form().fields.map((f: any) => f.id)).toEqual(["name", "state", "due", "labels", "desc"]);
+	expect(table().enter).toBe("add-update");
+	expect(table().actions.find((a: any) => a.id === "add-update").focus).toBe("update");
+
+	await event("field", { form: "task", field: "name", value: "Call Anna back", rowId: "1" });
+	await event("field", { form: "task", field: "due", value: "2026-11-20T17:00", rowId: "1" });
+	await event("field", { form: "task", field: "desc", value: "**Soon**", rowId: "1" });
+	let task = saved.at(-1)!.tasks.find((t) => t.id === 1)!;
+	expect([task.name, task.due, task.desc]).toEqual(["Call Anna back", "2026-11-20T17:00", "**Soon**"]);
+	// An empty name is refused, and the task stays as it was.
+	await event("field", { form: "task", field: "name", value: " ", rowId: "1" });
+	expect(toasts().at(-1)).toMatchObject({ text: "A task needs a name.", tone: "error" });
+
+	// Status moves it through its lifecycle; Snooze asks until when; Settled offers Undo.
+	await event("field", { form: "task", field: "state", value: "working", rowId: "1" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("working");
+	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working · since");
+	await event("field", { form: "task", field: "state", value: "snoozed", rowId: "1" });
+	expect(tree("screen:tasks").dialog.id).toBe("snooze");
+	await event("dialog-close", { dialog: "snooze" });
+	await event("field", { form: "task", field: "state", value: "settled", rowId: "1" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("settled");
+	expect(toasts().at(-1)).toMatchObject({ text: "Settled #1", action: { id: "undo" } });
+	await event("field", { form: "task", field: "state", value: "inbox", rowId: "1" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("inbox");
+
+	// The composer adds updates straight away; editing one in place keeps its added time.
+	await event("add-update", { rowId: "1", composer: "update", text: "Left a voicemail" });
+	await event("add-update", { rowId: "1", composer: "update", text: "She called back" });
+	expect(tree("screen:tasks").dialog).toBeUndefined();
+	task = saved.at(-1)!.tasks.find((t) => t.id === 1)!;
+	expect(task.updates.map((u) => u.text)).toEqual(["Left a voicemail", "She called back"]);
+	await event("edit-update-text", { rowId: "1", timeline: "updates", entryId: String(task.updates[0]!.id), text: "Left two voicemails" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.updates[0]!.text).toBe("Left two voicemails");
+	// Without text (the drawer can't show), Add update opens the dialog.
+	await event("add-update", { rowId: "1" });
+	expect(tree("screen:tasks").dialog.id).toBe("updates");
+});
+
+test("the quick view adds tasks and updates, and snoozes, without the window", async () => {
+	const { event, saved } = await start(fixture());
+	expect(tree("quick").children[0]).toMatchObject({ type: "composer", id: "quick-task", single: true, key: "n" });
+	await event("quick-task", { composer: "quick-task", text: "Buy stamps" }, "quick");
+	const added = saved.at(-1)!.tasks.at(-1)!;
+	expect([added.name, added.state]).toEqual(["Buy stamps", "inbox"]);
+	expect(toasts().at(-1)).toMatchObject({ text: `Added #${added.id} to the Inbox` });
+
+	const item = quickList().items.find((i: any) => i.id === "1");
+	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "add-update", "snooze:tomorrow", "settle"]);
+	expect(item.actions[1].input).toBeDefined();
+	await event("add-update", { rowId: "1", text: "Asked for a quote" }, "quick");
+	expect(quickList().items.find((i: any) => i.id === "1").subtitle).toContain("Asked for a quote");
+	await event("snooze:tomorrow", { rowId: "1" }, "quick");
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("snoozed");
 });
