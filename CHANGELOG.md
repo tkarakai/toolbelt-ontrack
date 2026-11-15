@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.4.0 — 2026-11-15
 - Edit tasks right in the details drawer, without a dialog. The drawer is redesigned to be dense and to show each thing once: a bar of action icons, the name in large type (click it or press E to rename), Status, Due and Labels as quiet properties you change in place, the description as formatted text that becomes an editor when you click it, one line of facts (ID, time worked, created, changed), related tasks, and the updates.
 - Write updates in the drawer: ↵ on a task (or ⇧U) goes straight to the update box; ⌘↵ adds the update and the box is ready for the next one. Edit an update's text in place with E, ↵ or a double-click; Change times… adjusts its times. Return no longer starts or stops work; use W and D.
 - → on a task moves into its details (opening the drawer if needed), and Esc comes back to the list. The arrow keys keep the keyboard in the list, so ← / → and Tab no longer switch screens after you've moved through the tasks.
