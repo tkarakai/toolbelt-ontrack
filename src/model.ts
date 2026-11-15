@@ -19,7 +19,15 @@ export type Label = {
 	color: Hue;
 	values: string[];
 	freeform: boolean;
+	/**
+	 * Listed values get their own intensity of the color, in list order: the first strongest
+	 * (High · Medium · Low) or the first lightest. Absent: every value has the same color.
+	 */
+	shades?: LabelShades;
 };
+
+export type LabelShades = "strongest-first" | "lightest-first";
+export const LABEL_SHADES: readonly LabelShades[] = ["strongest-first", "lightest-first"];
 
 /**
  * How one task relates to another. Stored once on the task that holds it, read from both sides:
@@ -93,7 +101,7 @@ export function seed(): Data {
 	const labels: Label[] = [
 		{ id: 1, name: "Project", type: "string", color: "blue", values: [], freeform: true },
 		{ id: 2, name: "isPersonal", type: "bool", color: "violet", values: [], freeform: false },
-		{ id: 3, name: "Priority", type: "string", color: "orange", values: ["High", "Medium", "Low"], freeform: false },
+		{ id: 3, name: "Priority", type: "string", color: "orange", values: ["High", "Medium", "Low"], freeform: false, shades: "strongest-first" },
 		{ id: 4, name: "Status", type: "string", color: "emerald", values: ["Todo", "In progress", "Blocked"], freeform: false },
 	];
 	return {
@@ -142,7 +150,7 @@ export const formatDue = (due: string) => due.replace("T", " ");
 
 // ── labels ──────────────────────────────────────────────────────────────
 
-export type LabelInput = { name: string; type: LabelType; color: string; values: string[]; freeform: boolean };
+export type LabelInput = { name: string; type: LabelType; color: string; values: string[]; freeform: boolean; shades?: string };
 
 function checkLabel(data: Data, input: LabelInput, id?: number): Omit<Label, "id"> {
 	const name = input.name.trim() || fail("A label needs a name.");
@@ -150,7 +158,20 @@ function checkLabel(data: Data, input: LabelInput, id?: number): Omit<Label, "id
 	if (input.type !== "string" && input.type !== "bool") fail("A label is either text or yes/no.");
 	if (!(HUES as readonly string[]).includes(input.color)) fail(`${input.color} is not a label color.`);
 	const values = input.type === "bool" ? [] : [...new Set(input.values.map((v) => v.trim()).filter(Boolean))];
-	return { name, type: input.type, color: input.color as Hue, values, freeform: input.type === "string" && input.freeform };
+	if (input.shades && !(LABEL_SHADES as readonly string[]).includes(input.shades)) fail(`${input.shades} is not a way to shade values.`);
+	// Shades need at least two listed values to differ.
+	const shades = input.type === "string" && values.length > 1 && input.shades ? (input.shades as LabelShades) : undefined;
+	return { name, type: input.type, color: input.color as Hue, values, freeform: input.type === "string" && input.freeform, ...(shades && { shades }) };
+}
+
+/** A listed value's intensity, 0 (lightest) to 1 (the full color), when its label shades values. */
+export function shadeOf(label: Label, value: string | boolean): number | undefined {
+	if (!label.shades || typeof value !== "string") return undefined;
+	const i = label.values.indexOf(value);
+	const n = label.values.length;
+	if (i < 0 || n < 2) return undefined;
+	const strength = 1 - i / (n - 1);
+	return label.shades === "strongest-first" ? strength : 1 - strength;
 }
 
 export function addLabel(data: Data, input: LabelInput): Label {
@@ -163,7 +184,9 @@ export function addLabel(data: Data, input: LabelInput): Label {
 /** Edits a label. Task values that the new definition no longer allows are dropped. */
 export function updateLabel(data: Data, id: number, input: LabelInput, now: number): Label {
 	const label = findLabel(data, id);
-	Object.assign(label, checkLabel(data, input, id));
+	const checked = checkLabel(data, input, id);
+	delete label.shades;
+	Object.assign(label, checked);
 	for (const task of data.tasks) {
 		const value = task.labels[id];
 		if (value !== undefined && !allowed(label, value)) {

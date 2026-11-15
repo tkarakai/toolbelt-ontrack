@@ -2,13 +2,13 @@
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type DetailItem, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
-import { dueAt, formatDue, relationsOf, type Data, type Label, type LabelInput, type Task, type TaskInput } from "./model";
+import { dueAt, formatDue, relationsOf, shadeOf, type Data, type Label, type LabelInput, type Task, type TaskInput } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
-	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values"> & { values: string }; error?: string }
+	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string };
 
 export type View = {
@@ -30,7 +30,7 @@ export function tags(data: Data, task: Task): Tag[] {
 	return data.labels.flatMap((label) => {
 		const value = task.labels[label.id];
 		if (value === undefined) return [];
-		return [{ text: value === true ? label.name : String(value), color: label.color, tooltip: value === true ? undefined : label.name }];
+		return [{ text: value === true ? label.name : String(value), color: label.color, tooltip: value === true ? undefined : label.name, shade: shadeOf(label, value) }];
 	});
 }
 
@@ -54,11 +54,13 @@ export function spent(ms: number) {
 
 const optionValue = (value: string | boolean) => (value === true ? "yes" : String(value));
 
-function filterOptions(data: Data, label: Label): string[] {
-	if (label.type === "bool") return ["yes"];
+/** A text label's listed values, then the other values tasks already use (sorted). */
+export function knownValues(data: Data, label: Label): string[] {
 	const used = data.tasks.map((t) => t.labels[label.id]).filter((v): v is string => typeof v === "string");
-	return [...new Set([...label.values, ...used.sort()])];
+	return [...new Set([...label.values, ...used.sort((a, b) => a.localeCompare(b))])];
 }
+
+const filterOptions = (data: Data, label: Label): string[] => (label.type === "bool" ? ["yes"] : knownValues(data, label));
 
 const taskName = (data: Data, id: number) => {
 	const task = data.tasks.find((t) => t.id === id);
@@ -246,7 +248,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				],
 			},
 		],
-		actions: [{ id: "new-task", label: "New task", icon: "plus", primary: true }],
+		actions: [{ id: "new-task", label: "New task", icon: "plus", primary: true, key: "n" }],
 		children: [
 			{
 				type: "table",
@@ -258,6 +260,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 					{ key: "due", title: "Due", width: 176, priority: 2 },
 					{ key: "when", title: "When", width: 120, priority: 3 },
 				],
+				appearance: "document",
 				...(archived ? {} : { sections: SECTIONS, reorder: true }),
 				selectEvents: true,
 				rows: shown.map((t) => taskRow(data, t, now)),
@@ -266,72 +269,91 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 					? { title: "Nothing archived", description: "Archive tasks you want out of sight but not deleted.", icon: "archive" }
 					: data.tasks.length
 						? { title: "No matching tasks", description: "Change the search or filters.", icon: "search-x" }
-						: { title: "No tasks yet", description: "Create one with New task.", icon: "list-checks" },
+						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
 		dialog: view.dialog && ["task", "relate", "snooze"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
-// ── labels screen ───────────────────────────────────────────────────────
+// ── settings screen ─────────────────────────────────────────────────────
 
-export function labelsScreen(data: Data, view: View, now: number): Node {
+/** Labels and relation types, each table with its own New button above it. */
+export function settingsScreen(data: Data, view: View, now: number): Node {
 	const uses = (label: Label) => data.tasks.filter((t) => t.labels[label.id] !== undefined).length;
 	return {
 		type: "page",
 		summary: `${data.labels.length} labels · ${data.relationTypes.length} relation types`,
-		actions: [
-			{ id: "new-label", label: "New label", icon: "tag", primary: true },
-			{ id: "new-relation-type", label: "New relation type", icon: "link" },
-		],
 		children: [
 			{
-				type: "table",
+				type: "card",
 				id: "labels",
-				columns: [
-					{ key: "name", title: "Label", grow: true },
-					{ key: "type", title: "Type", width: 90 },
-					{ key: "values", title: "Values", grow: 2, minWidth: 160 },
-					{ key: "uses", title: "Tasks", align: "right", width: 70 },
-				],
-				rows: data.labels.map((label) => ({
-					id: `l${label.id}`,
-					cells: {
-						name: { text: label.name, dot: label.color },
-						type: label.type === "bool" ? "Yes/no" : label.freeform ? "Free text" : "Lookup",
-						values: label.values.length
-							? { text: "", tags: label.values.map((v) => ({ text: v, color: label.color })), sub: label.freeform ? "suggestions" : undefined }
-							: { text: label.type === "bool" ? "—" : "any text", tone: "muted" },
-						uses: uses(label),
+				title: "Labels",
+				description: "Colored attributes a task can carry, one value each.",
+				actions: [{ id: "new-label", label: "New label", icon: "tag", primary: true }],
+				children: [
+					{
+						type: "table",
+						id: "labels",
+						columns: [
+							{ key: "name", title: "Label", grow: true },
+							{ key: "type", title: "Type", width: 90 },
+							{ key: "values", title: "Values", grow: 2, minWidth: 160 },
+							{ key: "uses", title: "Tasks", align: "right", width: 70 },
+						],
+						rows: data.labels.map((label) => ({
+							id: `l${label.id}`,
+							cells: {
+								name: { text: label.name, dot: label.color },
+								type: label.type === "bool" ? "Yes/no" : label.freeform ? "Free text" : "Lookup",
+								values: label.values.length
+									? {
+											text: "",
+											tags: label.values.map((v) => ({ text: v, color: label.color, shade: shadeOf(label, v) })),
+											sub: label.freeform ? "suggestions" : undefined,
+										}
+									: { text: label.type === "bool" ? "—" : "any text", tone: "muted" },
+								uses: uses(label),
+							},
+						})),
+						actions: [
+							{ id: "edit-label", label: "Edit", icon: "pencil", key: "e", inline: true },
+							{ id: "delete-label", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this label and remove it from every task?" },
+						],
+						empty: { title: "No labels", description: "Create one with New label.", icon: "tag" },
 					},
-				})),
-				actions: [
-					{ id: "edit-label", label: "Edit", icon: "pencil", key: "e", inline: true },
-					{ id: "delete-label", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this label and remove it from every task?" },
 				],
-				empty: { title: "No labels", description: "Create one with New label.", icon: "tag" },
 			},
 			{
-				type: "table",
+				type: "card",
 				id: "relation-types",
-				columns: [
-					{ key: "name", title: "Relation", grow: true },
-					{ key: "inverse", title: "Read from the other task", grow: true },
-					{ key: "uses", title: "Uses", align: "right", width: 70 },
-				],
-				rows: data.relationTypes.map((t) => ({
-					id: `r${t.id}`,
-					cells: {
-						name: { text: t.name, sub: t.id },
-						inverse: t.inverse,
-						uses: data.tasks.reduce((n, task) => n + task.relations.filter((r) => r.type === t.id).length, 0),
+				title: "Relation types",
+				description: "How one task can relate to another, read from both sides.",
+				actions: [{ id: "new-relation-type", label: "New relation type", icon: "link" }],
+				children: [
+					{
+						type: "table",
+						id: "relation-types",
+						columns: [
+							{ key: "name", title: "Relation", grow: true },
+							{ key: "inverse", title: "Read from the other task", grow: true },
+							{ key: "uses", title: "Uses", align: "right", width: 70 },
+						],
+						rows: data.relationTypes.map((t) => ({
+							id: `r${t.id}`,
+							cells: {
+								name: { text: t.name, sub: t.id },
+								inverse: t.inverse,
+								uses: data.tasks.reduce((n, task) => n + task.relations.filter((r) => r.type === t.id).length, 0),
+							},
+						})),
+						actions: [
+							{ id: "edit-relation-type", label: "Edit", icon: "pencil", key: "e", inline: true },
+							{ id: "delete-relation-type", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this relation type?" },
+						],
+						empty: { title: "No relation types", icon: "link" },
 					},
-				})),
-				actions: [
-					{ id: "edit-relation-type", label: "Edit", icon: "pencil", key: "e", inline: true },
-					{ id: "delete-relation-type", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this relation type?" },
 				],
-				empty: { title: "No relation types", icon: "link" },
 			},
 		],
 		dialog: view.dialog && ["label", "relationType"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
@@ -341,13 +363,23 @@ export function labelsScreen(data: Data, view: View, now: number): Node {
 // ── dialogs ─────────────────────────────────────────────────────────────
 
 /** Labels as the pill editor's keys: yes/no labels are flags, lookups pick from their values. */
+/**
+ * Labels as the pill editor's keys: yes/no labels are flags, lookups pick from their values.
+ * Free-text labels also suggest the values other tasks already have (an existing project).
+ */
 export function tagKeys(data: Data): TagKey[] {
-	return data.labels.map((l) => ({
-		key: String(l.id),
-		label: l.name,
-		color: l.color,
-		...(l.type === "bool" ? { flag: true } : { values: l.values, freeform: l.freeform }),
-	}));
+	return data.labels.map((l) => {
+		if (l.type === "bool") return { key: String(l.id), label: l.name, color: l.color, flag: true };
+		const shades = Object.fromEntries(l.values.flatMap((v) => { const shade = shadeOf(l, v); return shade === undefined ? [] : [[v, shade]]; }));
+		return {
+			key: String(l.id),
+			label: l.name,
+			color: l.color,
+			values: l.freeform ? knownValues(data, l) : l.values,
+			freeform: l.freeform,
+			...(Object.keys(shades).length && { shades }),
+		};
+	});
 }
 
 export const toTagValues = (labels: Task["labels"]): TagValue[] =>
@@ -459,6 +491,18 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 								? ([
 										{ type: "text", id: "values", label: "Values", value: d.values, placeholder: "High, Medium, Low", description: "Comma-separated lookup list." },
 										{ type: "switch", id: "freeform", label: "Allow any text", value: d.freeform, description: "Values become suggestions." },
+										{
+											type: "select",
+											id: "shades",
+											label: "Intensity",
+											value: d.shades || NONE,
+											options: [
+												{ value: NONE, label: "Same color for every value" },
+												{ value: "strongest-first", label: "Strongest first, then lighter" },
+												{ value: "lightest-first", label: "Lightest first, then stronger" },
+											],
+											description: "Gives each listed value its own shade of the color, in list order (High · Medium · Low).",
+										},
 									] satisfies Field[])
 								: []),
 						],

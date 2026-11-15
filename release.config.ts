@@ -1,8 +1,11 @@
 import { json, packagePlugin, run, updateJSONVersion, type ReleaseConfig } from "@toolbelt/sdk/release";
 
+/** The Toolbelt version packages are checked against: the minimum this plugin requires. */
+const HOST_VERSION = "0.3.10";
+
 export default {
 	repo: "tkarakai/toolbelt-ontrack",
-	hostVersion: "0.3.9",
+	hostVersion: HOST_VERSION,
 	products: {
 		plugin: {
 			changelog: "CHANGELOG.md",
@@ -13,7 +16,7 @@ export default {
 			},
 			async build() {
 				await run(["bun", "scripts/build.ts"]);
-				return packagePlugin("dist/package", "artifacts", "0.3.9", []);
+				return packagePlugin("dist/package", "artifacts", HOST_VERSION, []);
 			},
 		},
 	},

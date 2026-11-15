@@ -55,7 +55,8 @@ function fixture() {
 test("creates a task with the rich fields and saves it on top of the Inbox", async () => {
 	const { saved, event } = await start();
 	expect(table().sections.map((s: any) => s.id)).toEqual(["pinned", "inbox", "working", "snoozed", "settled"]);
-	expect(table()).toMatchObject({ reorder: true, selectEvents: true });
+	expect(table()).toMatchObject({ reorder: true, selectEvents: true, appearance: "document" });
+	expect(tree("screen:tasks").actions).toEqual([expect.objectContaining({ id: "new-task", key: "n" })]);
 	await event("new-task");
 	const fields = tree("screen:tasks").dialog.children[0].fields;
 	expect(fields.map((f: any) => f.type)).toEqual(["text", "datetime", "tags", "textarea"]);
@@ -70,8 +71,9 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	const row = rows()[0];
 	expect(row).toMatchObject({ id: "1", group: "inbox" });
 	expect(row.cells.name.tags).toEqual([
-		{ text: "isPersonal", color: "violet", tooltip: undefined },
-		{ text: "High", color: "orange", tooltip: "Priority" },
+		{ text: "isPersonal", color: "violet", tooltip: undefined, shade: undefined },
+		// Priority shades its values, strongest first: High is the full color.
+		{ text: "High", color: "orange", tooltip: "Priority", shade: 1 },
 	]);
 	expect(row.cells.due.tone).toBe("danger");
 	// Overdue counts for the badge.
@@ -183,6 +185,43 @@ test("labels use the color field", async () => {
 	await event("field", { form: "label", field: "color", value: "teal" }, "screen:labels");
 	await event("save", { dialog: "label" }, "screen:labels");
 	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Area", color: "teal" });
+});
+
+test("Settings has a New button above each table, and labels can shade their values", async () => {
+	const { saved, event } = await start();
+	const page = tree("screen:labels");
+	expect(page.actions).toBeUndefined();
+	expect(page.children.map((c: any) => [c.type, c.title, c.actions.map((a: any) => a.id), c.children[0].id])).toEqual([
+		["card", "Labels", ["new-label"], "labels"],
+		["card", "Relation types", ["new-relation-type"], "relation-types"],
+	]);
+	await event("new-label", undefined, "screen:labels");
+	const shades = () => tree("screen:labels").dialog.children[0].fields.find((f: any) => f.id === "shades");
+	expect(shades()).toMatchObject({ type: "select", value: "__none" });
+	await event("field", { form: "label", field: "name", value: "Effort" }, "screen:labels");
+	await event("field", { form: "label", field: "values", value: "S, M, L" }, "screen:labels");
+	await event("field", { form: "label", field: "shades", value: "lightest-first" }, "screen:labels");
+	await event("save", { dialog: "label" }, "screen:labels");
+	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Effort", values: ["S", "M", "L"], shades: "lightest-first" });
+	const values = tree("screen:labels").children[0].children[0].rows.at(-1).cells.values.tags;
+	expect(values.map((t: any) => [t.text, t.shade])).toEqual([["S", 0], ["M", 0.5], ["L", 1]]);
+	// Back to one color.
+	await event("edit-label", { rowId: `l${saved.at(-1)!.labels.at(-1)!.id}` }, "screen:labels");
+	expect(shades().value).toBe("lightest-first");
+	await event("field", { form: "label", field: "shades", value: "__none" }, "screen:labels");
+	await event("save", { dialog: "label" }, "screen:labels");
+	expect(saved.at(-1)!.labels.at(-1)!.shades).toBeUndefined();
+});
+
+test("free-text labels suggest the values other tasks already use", async () => {
+	const d = fixture();
+	d.tasks[0]!.labels[1] = "Toolbelt";
+	d.tasks[1]!.labels[1] = "Garden";
+	const { event } = await start(d);
+	await event("new-task");
+	const keys = tree("screen:tasks").dialog.children[0].fields.find((f: any) => f.id === "labels").keys;
+	expect(keys.find((k: any) => k.label === "Project")).toMatchObject({ values: ["Garden", "Toolbelt"], freeform: true });
+	expect(keys.find((k: any) => k.label === "Priority")).toMatchObject({ values: ["High", "Medium", "Low"], shades: { High: 1, Medium: 0.5, Low: 0 } });
 });
 
 test("prepare is always ready because writes are synchronous", async () => {
