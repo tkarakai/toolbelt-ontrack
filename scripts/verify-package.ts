@@ -20,13 +20,13 @@ try {
 	const env = { PATH: "/usr/bin:/bin", HOME: root, TOOLBELT_PLUGIN: m.id, TOOLBELT_PLUGIN_VERSION: m.version, TOOLBELT_DATA_DIR: data, TOOLBELT_PACKAGE_ROOT: pkg };
 
 	const migration = Bun.spawn([process.execPath, join(pkg, "migrate.js")], { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 10000 });
-	migration.stdin.write(JSON.stringify({ type: "migrate", transactionId: "verify", fromVersion: null, toVersion: m.version, fromSchema: null, toSchema: 1, sourceDir: data, targetDir: data }) + "\n");
+	migration.stdin.write(JSON.stringify({ type: "migrate", transactionId: "verify", fromVersion: null, toVersion: m.version, fromSchema: null, toSchema: m.data.schema, sourceDir: data, targetDir: data }) + "\n");
 	migration.stdin.end();
 	if ((await migration.exited) !== 0) throw Error("Packaged migration failed");
 
 	const proc = Bun.spawn([process.execPath, join(pkg, "index.js")], { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 10000 });
 	const send = (msg: unknown) => proc.stdin.write(JSON.stringify(msg) + "\n");
-	send({ type: "hello", protocol: 1, capabilities: ["ui.core", "ui.action-key", "lifecycle"], plugin: { id: m.id }, host: { name: "verify", version: "0.3.5" } });
+	send({ type: "hello", protocol: 1, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.3.9" } });
 	const surfaces = [...m.screens.map((s) => `screen:${s.id}`), "quick"];
 	const rendered = new Set<string>();
 	let buffer = "";
