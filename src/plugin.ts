@@ -5,7 +5,7 @@ import type { Context, PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, labelsScreen, quickView, tasksScreen, type View } from "./ui";
+import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, settingsScreen, tasksScreen, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
@@ -96,7 +96,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					dialog.until = String(value);
 				} else if (dialog?.kind === "label" && p?.form === "label") {
 					const d = dialog.draft;
-					if (p.field === "name" || p.field === "values" || p.field === "color") d[p.field as "name"] = String(value);
+					if (p.field === "name" || p.field === "values" || p.field === "color" || p.field === "shades") d[p.field as "name"] = String(value);
 					if (p.field === "type") d.type = value === "bool" ? "bool" : "string";
 					if (p.field === "freeform") d.freeform = value === true;
 				} else if (dialog?.kind === "relationType" && p?.form === "relationType") {
@@ -169,11 +169,11 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				offerUndo(c, `Deleted ${name2(rowId())}`, before);
 				return true;
 			case "new-label":
-				view.dialog = { kind: "label", draft: { name: "", type: "string", color: "blue", values: "", freeform: false } };
+				view.dialog = { kind: "label", draft: { name: "", type: "string", color: "blue", values: "", freeform: false, shades: "" } };
 				return false;
 			case "edit-label": {
 				const l = model.findLabel(data, rowId());
-				view.dialog = { kind: "label", id: l.id, draft: { name: l.name, type: l.type, color: l.color, values: l.values.join(", "), freeform: l.freeform } };
+				view.dialog = { kind: "label", id: l.id, draft: { name: l.name, type: l.type, color: l.color, values: l.values.join(", "), freeform: l.freeform, shades: l.shades ?? "" } };
 				return false;
 			}
 			case "delete-label":
@@ -233,7 +233,8 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		},
 		render: {
 			"screen:tasks": () => tasksScreen(data, view, now()),
-			"screen:labels": () => labelsScreen(data, view, now()),
+			// The screen id stays `labels` (renderer state and shortcuts key on it); it's titled Settings.
+			"screen:labels": () => settingsScreen(data, view, now()),
 			quick: () => quickView(data, now()),
 		},
 		onEvent(_surface, name, payload, c) {

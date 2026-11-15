@@ -16,7 +16,7 @@ keeps room for a real agent later.
   in your order; new tasks and tasks that come back land at the top. **Working** is what you're
   doing now, in your order. **Snoozed** is hidden until its wake time, soonest first. **Settled**
   (done) is a collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
-  *Archived* in the toolbar to see them.
+  *Archived* in the toolbar to see them. **New task** is N.
 - **Start working on this** (W) moves a task to Working, like sending an agent a message.
   **Done for now** (D) sends it back to the top of the Inbox, unread, like an agent finishing its
   turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
@@ -32,7 +32,8 @@ keeps room for a real agent later.
   task marks it read. Nothing settles on its own.
 - Search matches names, descriptions and label values; each label is a toolbar filter. The
   details drawer shows state, time spent, labels, related tasks and the description.
-- **Labels** defines labels (with color swatches) and relation types.
+- **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
+  own New button above it.
 - The menu-bar **quick view** is a focus list: what you're working on (with elapsed time), then
   Pinned and the Inbox in your order, with Done for now / Start working and Settle buttons. Enter
   opens the task in the main window. The plugin badge counts open tasks that are unread or
@@ -51,7 +52,12 @@ A label has a name, a color and a type:
 
 - **Yes/no** labels are either on a task or not (isPersonal).
 - **Lookup** labels pick one value from their list (Priority: High, Medium, Low).
-- **Free text** labels accept any value; their list, if any, holds suggestions (Project).
+- **Free text** labels accept any value; their list, if any, holds suggestions, followed by the
+  values other tasks already use (Project).
+
+A text label can give its listed values their own **intensity** of its color, in list order:
+strongest first (High · Medium · Low, as Priority does on a fresh install) or lightest first.
+Every shade keeps its text readable in light and dark themes.
 
 A fresh install has Project, isPersonal, Priority and Status (Todo, In progress, Blocked; done is
 Settled). The label's color is used for its pills, filter dots and details. Narrowing a lookup list or deleting a label removes the values

@@ -175,3 +175,23 @@ test("the table shows the description's first line without Markdown", () => {
 	expect(snippet("- `code` item")).toBe("code item");
 	expect(snippet("  ")).toBeUndefined();
 });
+
+describe("label shades", () => {
+	test("listed values get intensities in list order; others and unshaded labels get none", () => {
+		const d = m.seed();
+		const priority = d.labels.find((l) => l.name === "Priority")!;
+		expect(["High", "Medium", "Low", "Other"].map((v) => m.shadeOf(priority, v))).toEqual([1, 0.5, 0, undefined]);
+		const status = d.labels.find((l) => l.name === "Status")!;
+		expect(m.shadeOf(status, "Todo")).toBeUndefined();
+		m.updateLabel(d, status.id, { name: "Status", type: "string", color: "emerald", values: status.values, freeform: false, shades: "lightest-first" }, NOW);
+		expect(status.values.map((v) => m.shadeOf(status, v))).toEqual([0, 0.5, 1]);
+	});
+	test("shades need two listed values and a known order", () => {
+		const d = m.seed();
+		const one = m.addLabel(d, { name: "Solo", type: "string", color: "blue", values: ["Only"], freeform: false, shades: "strongest-first" });
+		expect(one.shades).toBeUndefined();
+		expect(() => m.addLabel(d, { name: "Bad", type: "string", color: "blue", values: ["a", "b"], freeform: false, shades: "sideways" })).toThrow(m.InvalidInput);
+		const flag = m.addLabel(d, { name: "Flag", type: "bool", color: "blue", values: [], freeform: false, shades: "strongest-first" });
+		expect(flag.shades).toBeUndefined();
+	});
+});

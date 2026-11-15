@@ -44,9 +44,9 @@
     },
     {
       "id": "labels",
-      "title": "Labels",
-      "icon": "tags",
-      "shortcut": "l"
+      "title": "Settings",
+      "icon": "settings",
+      "shortcut": "s"
     }
   ],
   "quickView": true

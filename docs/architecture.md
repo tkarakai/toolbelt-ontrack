@@ -10,11 +10,13 @@ package over JSON lines on stdin/stdout; stderr is diagnostic output. UI is a de
 Toolbelt keeps selection, typing, scroll and drag feedback. Dialog drafts, search, filters, the
 Tasks/Archived choice and the Undo snapshot live in plugin memory and reset on restart.
 
-The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and `labels` (L),
+The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and `labels` (titled
+Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `sections` (pinned, inbox, working, snoozed, settled), `reorder` and
-`selectEvents`. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
+The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working, snoozed,
+settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each table in a card
+whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder` and `ui.modifier-keys`. The
 package is portable JavaScript, uses SDK 0.3.5 and needs Toolbelt 0.3.9 or newer.
@@ -36,7 +38,9 @@ package is portable JavaScript, uses SDK 0.3.5 and needs Toolbelt 0.3.9 or newer
 
 Schema 2 is one JSON document: `nextTaskId`, `nextLabelId`, `tasks`, `labels`, `relationTypes`
 and `order` (`pinned`, `inbox`, `working`: task ids in the person's order). IDs are never reused.
-A task's `labels` maps label id to its value (`true` for yes/no labels). `due` is a local
+A task's `labels` maps label id to its value (`true` for yes/no labels). A label's optional
+`shades` (`strongest-first` or `lightest-first`) gives its listed values a `Tag.shade` in list
+order; absent means one color. It is additive, so schema 2 still holds and older versions keep it. `due` is a local
 wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a time zone. A relation
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
