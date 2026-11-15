@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+## 0.1.0 — 2026-11-15
 - Tasks live in T3 Code-style sections: Pinned, Inbox, Working, Snoozed and Settled, plus Archive.
   Start working on a task (W), send it back with Done for now (D), snooze it until a chosen time,
   settle it when it's done, pin it, or archive it. Settle, snooze, unpin, archive and delete can be
