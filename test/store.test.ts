@@ -33,9 +33,9 @@ test("a damaged file fails loudly", () => {
 
 test("migration seeds once and keeps existing data", async () => {
 	const dir = temp();
-	const migrate = async () => {
+	const migrate = async (from: number | null = null) => {
 		const p = Bun.spawn([process.execPath, join(import.meta.dir, "../src/migrate.ts")], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-		p.stdin.write(JSON.stringify({ type: "migrate", transactionId: "t", fromVersion: null, toVersion: "0.0.1", fromSchema: null, toSchema: 1, sourceDir: dir, targetDir: dir }));
+		p.stdin.write(JSON.stringify({ type: "migrate", transactionId: "t", fromVersion: null, toVersion: "0.0.1", fromSchema: from, toSchema: 2, sourceDir: dir, targetDir: dir }));
 		p.stdin.end();
 		expect(await p.exited).toBe(0);
 		return (await new Response(p.stdout).text()).trim().split("\n").map((l) => JSON.parse(l));
@@ -49,6 +49,10 @@ test("migration seeds once and keeps existing data", async () => {
 		const second = await migrate();
 		expect(second.map((m) => m.text).filter(Boolean)).toEqual(["Existing tasks kept"]);
 		expect(load(dir).tasks[0]!.name).toBe("keep me");
+		// Schema 1 data is upgraded in place.
+		writeFileSync(join(dir, FILE), JSON.stringify({ ...seed(), schema: 1, order: undefined, tasks: [{ id: 1, name: "old", created: 1, updated: 1, desc: "", labels: {}, relations: [] }] }));
+		expect((await migrate(1)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks moved into Inbox and Settled"]);
+		expect(load(dir).tasks[0]).toMatchObject({ name: "old", state: "inbox" });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

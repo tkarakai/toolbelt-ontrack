@@ -80,7 +80,7 @@ describe("labels", () => {
 	});
 	test("deleting a label removes it from tasks", () => {
 		const d = m.seed();
-		const t = task(d, "x", { labels: { 4: "Done" } });
+		const t = task(d, "x", { labels: { 4: "Todo" } });
 		m.deleteLabel(d, 4, NOW + 1);
 		expect(t.labels).toEqual({});
 		expect(d.labels.some((l) => l.id === 4)).toBe(false);
@@ -140,10 +140,34 @@ describe("relations", () => {
 	});
 });
 
+test("new tasks start in the Inbox, on top", () => {
+	const d = m.seed();
+	const [a, b] = [task(d, "a"), task(d, "b")];
+	expect([a.state, a.pinned, a.archived, a.unread, a.sessions]).toEqual(["inbox", false, false, false, []]);
+	expect(d.order.inbox).toEqual([b.id, a.id]);
+	m.deleteTask(d, a.id, NOW);
+	expect(d.order.inbox).toEqual([b.id]);
+});
+
+test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
+	const old = { ...m.seed(), schema: 1, order: undefined, labels: [...m.seed().labels.slice(0, 3), { id: 4, name: "Status", type: "string", color: "emerald", values: ["Todo", "Done"], freeform: false }] } as any;
+	old.tasks = [
+		{ id: 1, name: "open", created: 1, updated: 2, desc: "", labels: { 4: "Todo" }, relations: [] },
+		{ id: 2, name: "done", created: 1, updated: 5, desc: "", labels: { 4: "Done" }, relations: [] },
+	];
+	const d = m.upgrade1to2(old);
+	expect(d.schema).toBe(2);
+	expect(d.tasks.map((t) => [t.state, t.settledAt])).toEqual([["inbox", undefined], ["settled", 5]]);
+	expect(d.order).toEqual({ pinned: [], inbox: [1], working: [] });
+	expect(m.parseData(JSON.parse(JSON.stringify(d)))).toEqual(JSON.parse(JSON.stringify(d)));
+	expect(() => m.upgrade1to2(d)).toThrow(m.InvalidInput);
+});
+
 test("parseData rejects other schemas and damaged files", () => {
 	expect(m.parseData(JSON.parse(JSON.stringify(m.seed())))).toEqual(m.seed());
 	expect(() => m.parseData({ schema: 2 })).toThrow(m.InvalidInput);
 	expect(() => m.parseData({ ...m.seed(), tasks: null })).toThrow(m.InvalidInput);
+	expect(() => m.parseData({ ...m.seed(), order: undefined })).toThrow(m.InvalidInput);
 });
 
 test("the table shows the description's first line without Markdown", () => {

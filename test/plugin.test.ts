@@ -1,17 +1,23 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Node, PluginMessage } from "@toolbelt/sdk";
 import { fakeHost } from "@toolbelt/sdk/testing";
-import { seed, type Data } from "../src/model";
+import { addTask, seed, type Data } from "../src/model";
 import { ontrack } from "../src/plugin";
 
-const NOW = new Date(2026, 10, 14, 12, 0).getTime();
+const START = new Date(2026, 10, 14, 12, 0).getTime();
+let clock = START;
 let host: ReturnType<typeof fakeHost> | undefined;
-afterEach(() => host?.close());
+afterEach(() => {
+	host?.close();
+	clock = START;
+});
+
+const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys"];
 
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
-	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => NOW }));
-	host.send({ type: "hello", protocol: 1, capabilities: ["ui.core", "ui.action-key", "lifecycle"], plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.5" } });
+	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => clock }));
+	host.send({ type: "hello", protocol: 1, capabilities: CAPS, plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.9" } });
 	await until(() => host!.messages.some((m) => m.type === "ready"));
 	for (const surface of ["screen:tasks", "screen:labels", "quick"]) host.send({ type: "open", surface });
 	await until(() => !!tree("quick"));
@@ -21,7 +27,7 @@ async function start(initial: Data = seed()) {
 async function send(surface: string, name: string, payload?: unknown) {
 	const count = host!.messages.length;
 	host!.send({ type: "event", surface, name, payload });
-	await until(() => host!.messages.length > count || false, 200).catch(() => {});
+	await until(() => host!.messages.length > count, 200).catch(() => {});
 }
 
 async function until(check: () => boolean, ms = 2000) {
@@ -34,87 +40,149 @@ async function until(check: () => boolean, ms = 2000) {
 
 const tree = (surface: string): any =>
 	(host!.messages.filter((m): m is Extract<PluginMessage, { type: "render" }> => m.type === "render" && m.surface === surface).at(-1) as any)?.tree as Node;
-const rows = () => tree("screen:tasks").children[0].rows;
+const table = () => tree("screen:tasks").children[0];
+const rows = () => table().rows as any[];
+const bySection = () => Object.fromEntries(table().sections.map((s: any) => [s.id, rows().filter((r) => r.group === s.id).map((r) => r.cells.name.text)]));
+const lastBadge = () => host!.messages.filter((m) => m.type === "badge").at(-1);
+const toasts = () => host!.messages.filter((m: any) => m.type === "toast") as any[];
 
-test("creates a task through the dialog and saves it", async () => {
+function fixture() {
+	const d = seed();
+	for (const name of ["Write spec", "Reply to Anna", "Fix login bug"]) addTask(d, { name, due: "", desc: "", labels: {} }, START);
+	return d; // Inbox: Fix login bug (#3), Reply to Anna (#2), Write spec (#1)
+}
+
+test("creates a task with the rich fields and saves it on top of the Inbox", async () => {
 	const { saved, event } = await start();
-	expect(tree("screen:tasks").children[0].empty.title).toBe("No tasks yet");
+	expect(table().sections.map((s: any) => s.id)).toEqual(["pinned", "inbox", "working", "snoozed", "settled"]);
+	expect(table()).toMatchObject({ reorder: true, selectEvents: true });
 	await event("new-task");
-	expect(tree("screen:tasks").dialog.title).toBe("New task");
-	expect(tree("screen:labels").dialog).toBeUndefined();
+	const fields = tree("screen:tasks").dialog.children[0].fields;
+	expect(fields.map((f: any) => f.type)).toEqual(["text", "datetime", "tags", "textarea"]);
+	expect(fields[2].keys.map((k: any) => [k.label, !!k.flag])).toEqual([["Project", false], ["isPersonal", true], ["Priority", false], ["Status", false]]);
 	await event("field", { form: "task", field: "name", value: "Ship OnTrack" });
 	await event("field", { form: "task", field: "due", value: "2026-11-13" });
-	await event("field", { form: "task", field: "label:3", value: "High" });
-	await event("field", { form: "task", field: "label:2", value: true });
+	await event("field", { form: "task", field: "labels", value: [{ key: "3", value: "High" }, { key: "2" }] });
+	await event("field", { form: "task", field: "desc", value: "# Plan\n\n- ship" });
 	await event("save", { dialog: "task" });
 	expect(tree("screen:tasks").dialog).toBeUndefined();
-	expect(saved.at(-1)!.tasks).toEqual([{ id: 1, name: "Ship OnTrack", created: NOW, updated: NOW, due: "2026-11-13", desc: "", labels: { 2: true, 3: "High" }, relations: [] }]);
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ id: 1, name: "Ship OnTrack", due: "2026-11-13", desc: "# Plan\n\n- ship", labels: { 2: true, 3: "High" }, state: "inbox" });
 	const row = rows()[0];
+	expect(row).toMatchObject({ id: "1", group: "inbox" });
 	expect(row.cells.name.tags).toEqual([
 		{ text: "isPersonal", color: "violet", tooltip: undefined },
 		{ text: "High", color: "orange", tooltip: "Priority" },
 	]);
 	expect(row.cells.due.tone).toBe("danger");
-	expect(host!.messages.filter((m) => m.type === "badge").at(-1)).toEqual({ type: "badge", value: 1 });
-	expect(tree("quick").items[0]).toMatchObject({ id: "1", title: "Ship OnTrack", dot: "danger" });
+	// Overdue counts for the badge.
+	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 });
 
-test("invalid input keeps the dialog open with the error and changes nothing", async () => {
-	const { saved, event } = await start();
-	await event("new-task");
-	await event("field", { form: "task", field: "name", value: "x" });
-	await event("field", { form: "task", field: "due", value: "tomorrow" });
-	await event("save", { dialog: "task" });
-	expect(tree("screen:tasks").dialog.children[0]).toMatchObject({ type: "text", tone: "danger" });
-	expect(saved).toEqual([]);
-	await event("dialog-close", { dialog: "task" });
-	expect(tree("screen:tasks").dialog).toBeUndefined();
+test("start working, done for now, unread until opened", async () => {
+	const { event } = await start(fixture());
+	await event("start", { rowId: "2" });
+	expect(bySection().working).toEqual(["Reply to Anna"]);
+	expect(rows().find((r) => r.id === "2").actions).toContain("done");
+	expect(tree("quick").items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working · under a minute" });
+	clock += 25 * 60_000;
+	await event("done", { rowId: "2" });
+	expect(bySection().inbox[0]).toBe("Reply to Anna");
+	const row = rows().find((r) => r.id === "2");
+	expect(row).toMatchObject({ unread: true });
+	expect(row.cells.name.sub).toBe("Back from Working");
+	expect(row.details.find((d: any) => d.label === "Time spent").value).toBe("25m in 1 session");
+	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
+	await event("select", { table: "tasks", rowId: "2" });
+	expect(rows().find((r) => r.id === "2").unread).toBeUndefined();
+	expect(lastBadge()).toEqual({ type: "badge", value: null });
 });
 
-test("relates, filters, searches and hides done tasks", async () => {
-	const data = seed();
-	data.tasks = [
-		{ id: 1, name: "Epic", created: 0, updated: 0, desc: "", labels: { 4: "Todo" }, relations: [] },
-		{ id: 2, name: "Step", created: 0, updated: 0, desc: "**bold**", labels: { 4: "Done" }, relations: [] },
-	];
-	data.nextTaskId = 3;
-	const { saved, event } = await start(data);
-	expect(rows().map((r: any) => r.id)).toEqual(["1"]);
-	await event("field", { form: "show", field: "show", value: "all" });
-	expect(rows().map((r: any) => r.id)).toEqual(["1", "2"]);
+test("drag between sections performs the matching transition", async () => {
+	const { saved, event } = await start(fixture());
+	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
+	await event("reorder", { table: "tasks", rowId: "3", section: "pinned", before: null });
+	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
+	expect(bySection()).toEqual({ pinned: ["Fix login bug"], inbox: [], working: ["Write spec"], snoozed: [], settled: ["Reply to Anna"] });
+	expect(saved.at(-1)!.order.pinned).toEqual([3]);
+	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
+	expect(toasts().at(-1)).toMatchObject({ text: "Choose Snooze to pick a wake time.", tone: "error" });
+});
+
+test("snooze from the menu, wake on time unread, and the custom snooze dialog", async () => {
+	const { event } = await start(fixture());
+	const snooze = table().actions.find((a: any) => a.id === "snooze");
+	expect(snooze.menu.map((a: any) => a.id)).toEqual(["snooze:3h", "snooze:evening", "snooze:tomorrow", "snooze:monday"]);
+	await event("snooze:3h", { rowId: "1" });
+	expect(bySection().snoozed).toEqual(["Write spec"]);
+	expect(toasts().at(-1)).toMatchObject({ action: { id: "undo", label: "Undo" } });
+	clock += 3 * 3_600_000;
+	await event("search", { query: "" }); // any event looks at the clock
+	expect(bySection().inbox[0]).toBe("Write spec");
+	expect(rows().find((r) => r.id === "1")).toMatchObject({ unread: true });
+	await event("snooze", { rowId: "2" });
+	expect(tree("screen:tasks").dialog.children[0].fields[0]).toMatchObject({ type: "datetime", value: "2026-11-15T09:00" });
+	await event("field", { form: "snooze", field: "until", value: "2026-11-16" });
+	await event("save", { dialog: "snooze" });
+	const row = rows().find((r) => r.id === "2");
+	expect(row.group).toBe("snoozed");
+	expect(row.cells.when.at).toBe(new Date(2026, 10, 16, 9, 0).getTime());
+});
+
+test("Undo restores what settle, archive and delete changed, but only briefly", async () => {
+	const { event } = await start(fixture());
+	await event("settle", { rowId: "1" });
+	expect(bySection().settled).toEqual(["Write spec"]);
+	await event("undo", undefined, "toast");
+	expect(bySection().settled).toEqual([]);
+	expect(bySection().inbox).toContain("Write spec");
+	await event("delete", { rowId: "2" });
+	clock += 6_000;
+	await event("undo", undefined, "toast");
+	expect(toasts().at(-1)).toMatchObject({ text: "Too late to undo.", tone: "error" });
+	expect(rows().some((r) => r.id === "2")).toBe(false);
+	await event("archive", { rowId: "3" });
+	expect(rows().some((r) => r.id === "3")).toBe(false);
+	await event("field", { form: "show", field: "show", value: "archived" });
+	expect(table().id).toBe("archived");
+	expect(table().sections).toBeUndefined();
+	expect(rows().map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "delete"]]]);
+	await event("unarchive", { rowId: "3" });
+	await event("field", { form: "show", field: "show", value: "active" });
+	expect(bySection().inbox[0]).toBe("Fix login bug");
+});
+
+test("move up and down with ⌥↑ / ⌥↓ actions", async () => {
+	const { event } = await start(fixture());
+	expect(table().actions.find((a: any) => a.id === "up").key).toBe("alt+up");
+	await event("down", { rowId: "3" });
+	expect(bySection().inbox).toEqual(["Reply to Anna", "Fix login bug", "Write spec"]);
+	await event("up", { rowId: "1" });
+	expect(bySection().inbox).toEqual(["Reply to Anna", "Write spec", "Fix login bug"]);
+});
+
+test("relates through the searchable task picker; settling a blocker marks the blocked task unread", async () => {
+	const { event } = await start(fixture());
 	await event("relate", { rowId: "1" });
-	await event("field", { form: "relate", field: "type", value: "~parent" });
-	await event("field", { form: "relate", field: "to", value: "2" });
+	const picker = tree("screen:tasks").dialog.children[0].fields[1];
+	expect(picker).toMatchObject({ type: "combobox", id: "to" });
+	expect(picker.options.map((o: any) => o.value)).toEqual(["2", "3"]);
+	await event("field", { form: "relate", field: "type", value: "blocks" });
+	await event("field", { form: "relate", field: "to", value: "3" });
 	await event("save", { dialog: "relate" });
-	expect(saved.at(-1)!.tasks[1]!.relations).toEqual([{ task: 1, type: "parent" }]);
-	const epic = rows()[0];
-	expect(epic.details.find((d: any) => d.section === "Related tasks")).toMatchObject({ label: "Child", value: "#2 Step" });
-	expect(epic.targets.unrelate).toEqual([{ id: "2:parent:1", label: "Child #2 Step", icon: "link" }]);
-	await event("filter", { filter: "label:4", values: ["Done"] });
-	expect(rows().map((r: any) => r.id)).toEqual(["2"]);
-	await event("filter", { filter: "label:4", values: [] });
-	await event("search", { query: "epic" });
-	expect(rows().map((r: any) => r.id)).toEqual(["1"]);
-	await event("unrelate", { rowId: "1", target: "2:parent:1" });
-	expect(saved.at(-1)!.tasks[1]!.relations).toEqual([]);
+	await event("settle", { rowId: "1" });
+	expect(rows().find((r) => r.id === "3")).toMatchObject({ unread: true });
+	expect(rows().find((r) => r.id === "3").cells.name.sub).toBe("Unblocked: #1 is settled");
 });
 
-test("manages labels and relation types from the Labels screen", async () => {
+test("labels use the color field", async () => {
 	const { saved, event } = await start();
 	await event("new-label", undefined, "screen:labels");
-	expect(tree("screen:labels").dialog.title).toBe("New label");
-	expect(tree("screen:tasks").dialog).toBeUndefined();
+	const color = tree("screen:labels").dialog.children[0].fields.find((f: any) => f.id === "color");
+	expect(color).toMatchObject({ type: "color", value: "blue" });
 	await event("field", { form: "label", field: "name", value: "Area" }, "screen:labels");
-	await event("field", { form: "label", field: "values", value: "Home, Work" }, "screen:labels");
 	await event("field", { form: "label", field: "color", value: "teal" }, "screen:labels");
 	await event("save", { dialog: "label" }, "screen:labels");
-	expect(saved.at(-1)!.labels.at(-1)).toEqual({ id: 5, name: "Area", type: "string", color: "teal", values: ["Home", "Work"], freeform: false });
-	await event("delete-label", { rowId: "l1" }, "screen:labels");
-	expect(saved.at(-1)!.labels.map((l) => l.name)).toEqual(["isPersonal", "Priority", "Status", "Area"]);
-	await event("edit-relation-type", { rowId: "rblocks" }, "screen:labels");
-	await event("field", { form: "relationType", field: "inverse", value: "Waits on" }, "screen:labels");
-	await event("save", { dialog: "relationType" }, "screen:labels");
-	expect(saved.at(-1)!.relationTypes.find((t) => t.id === "blocks")).toEqual({ id: "blocks", name: "Blocks", inverse: "Waits on" });
+	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Area", color: "teal" });
 });
 
 test("prepare is always ready because writes are synchronous", async () => {

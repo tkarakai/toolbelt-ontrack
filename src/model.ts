@@ -2,7 +2,7 @@
 // so every rule is testable on plain objects.
 import { HUES, type Hue } from "@toolbelt/sdk";
 
-export const SCHEMA = 1;
+export const SCHEMA = 2;
 
 export type LabelType = "string" | "bool";
 
@@ -29,6 +29,15 @@ export type RelationType = { id: string; name: string; inverse: string };
 
 export type Relation = { task: number; type: string };
 
+/**
+ * Where a task is in its life, as in T3 Code's thread list: waiting in the Inbox, being worked on,
+ * snoozed until a time, or settled (done). Pinning and archiving are separate flags on top.
+ */
+export type TaskState = "inbox" | "working" | "snoozed" | "settled";
+
+/** A stretch of work on a task, by whoever worked on it ("me" now; an agent later). */
+export type Session = { start: number; end?: number; by: string };
+
 export type Task = {
 	id: number;
 	name: string;
@@ -43,7 +52,25 @@ export type Task = {
 	/** Label id → value (`true` for bool labels). */
 	labels: Record<string, string | boolean>;
 	relations: Relation[];
+	state: TaskState;
+	/** Shown in Pinned (unless snoozed or settled); keeps its Inbox/Working position. */
+	pinned: boolean;
+	/** Hidden from the sections; found in the Archived view and by search. */
+	archived: boolean;
+	/** Something happened since the person last opened it; `unreadReason` says what. */
+	unread: boolean;
+	unreadReason?: string;
+	/** Epoch ms the snooze ends (state `snoozed`). */
+	snoozedUntil?: number;
+	/** Epoch ms it was settled (state `settled`). */
+	settledAt?: number;
+	/** The `due` value whose arrival was already announced, so it's announced once. */
+	dueAnnounced?: string;
+	sessions: Session[];
 };
+
+/** The person's order of the sections they arrange; ids not listed go last. */
+export type Order = { pinned: number[]; inbox: number[]; working: number[] };
 
 export type Data = {
 	schema: typeof SCHEMA;
@@ -52,6 +79,7 @@ export type Data = {
 	tasks: Task[];
 	labels: Label[];
 	relationTypes: RelationType[];
+	order: Order;
 };
 
 export class InvalidInput extends Error {}
@@ -66,7 +94,7 @@ export function seed(): Data {
 		{ id: 1, name: "Project", type: "string", color: "blue", values: [], freeform: true },
 		{ id: 2, name: "isPersonal", type: "bool", color: "violet", values: [], freeform: false },
 		{ id: 3, name: "Priority", type: "string", color: "orange", values: ["High", "Medium", "Low"], freeform: false },
-		{ id: 4, name: "Status", type: "string", color: "emerald", values: ["Todo", "In progress", "Blocked", "Done"], freeform: false },
+		{ id: 4, name: "Status", type: "string", color: "emerald", values: ["Todo", "In progress", "Blocked"], freeform: false },
 	];
 	return {
 		schema: SCHEMA,
@@ -80,6 +108,7 @@ export function seed(): Data {
 			{ id: "supersedes", name: "Supersedes", inverse: "Superseded by" },
 			{ id: "blocks", name: "Blocks", inverse: "Blocked by" },
 		],
+		order: { pinned: [], inbox: [], working: [] },
 	};
 }
 
@@ -179,9 +208,22 @@ function checkTask(data: Data, input: TaskInput): Pick<Task, "name" | "due" | "d
 
 export function addTask(data: Data, input: TaskInput, now: number): Task {
 	const checked = checkTask(data, input);
-	const task: Task = { id: data.nextTaskId++, created: now, updated: now, relations: [], ...checked };
+	const task: Task = {
+		id: data.nextTaskId++,
+		created: now,
+		updated: now,
+		relations: [],
+		...checked,
+		state: "inbox",
+		pinned: false,
+		archived: false,
+		unread: false,
+		sessions: [],
+	};
 	if (task.due === undefined) delete task.due;
 	data.tasks.push(task);
+	// New tasks go on top of the Inbox, above the ones already arranged.
+	data.order.inbox.unshift(task.id);
 	return task;
 }
 
@@ -190,6 +232,8 @@ export function updateTask(data: Data, id: number, input: TaskInput, now: number
 	const next = checkTask(data, input);
 	Object.assign(task, next, { updated: now });
 	if (next.due === undefined) delete task.due;
+	// A new due date is announced again when it arrives.
+	if (task.dueAnnounced !== task.due) delete task.dueAnnounced;
 	return task;
 }
 
@@ -197,6 +241,7 @@ export function updateTask(data: Data, id: number, input: TaskInput, now: number
 export function deleteTask(data: Data, id: number, now: number) {
 	findTask(data, id);
 	data.tasks = data.tasks.filter((t) => t.id !== id);
+	for (const key of ["pinned", "inbox", "working"] as const) data.order[key] = data.order[key].filter((x) => x !== id);
 	for (const task of data.tasks) {
 		const kept = task.relations.filter((r) => r.task !== id);
 		if (kept.length !== task.relations.length) {
@@ -295,5 +340,26 @@ export function parseData(value: unknown): Data {
 	if (!d || typeof d !== "object" || d.schema !== SCHEMA) fail(`Unsupported data schema ${String((d as Data | undefined)?.schema)}.`);
 	if (!Array.isArray(d.tasks) || !Array.isArray(d.labels) || !Array.isArray(d.relationTypes)) fail("The data file is damaged.");
 	if (!Number.isInteger(d.nextTaskId) || !Number.isInteger(d.nextLabelId)) fail("The data file is damaged.");
+	if (!d.order || !Array.isArray(d.order.pinned) || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	return d;
+}
+
+/**
+ * Schema 1 → 2: tasks get a lifecycle. Tasks whose Status was Done become settled (Settled now
+ * means done); everything else waits in the Inbox in ID order, nothing pinned or unread.
+ */
+export function upgrade1to2(old: any): Data {
+	if (!old || old.schema !== 1 || !Array.isArray(old.tasks)) fail("Expected schema 1 data.");
+	const status = (old.labels as Label[]).find((l) => l.name.toLowerCase() === "status");
+	const tasks: Task[] = (old.tasks as Task[]).map((t) => {
+		const value = status ? t.labels[status.id] : undefined;
+		const done = typeof value === "string" && value.toLowerCase() === "done";
+		return { ...t, state: done ? "settled" : "inbox", ...(done && { settledAt: t.updated }), pinned: false, archived: false, unread: false, sessions: [] };
+	});
+	return {
+		...old,
+		schema: SCHEMA,
+		tasks,
+		order: { pinned: [], inbox: tasks.filter((t) => t.state === "inbox").map((t) => t.id), working: [] },
+	};
 }

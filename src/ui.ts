@@ -1,11 +1,13 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { HUES, search, type Action, type Cell, type DetailItem, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Tag } from "@toolbelt/sdk";
+import { HUES, search, type Action, type Cell, type DetailItem, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, formatDue, relationsOf, type Data, type Label, type LabelInput, type Task, type TaskInput } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
+	| { kind: "snooze"; id: number; until: string; error?: string }
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values"> & { values: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string };
 
@@ -13,25 +15,17 @@ export type View = {
 	query: string;
 	/** Filter id → selected option values. */
 	filters: Record<string, string[]>;
-	sort: { key: string; desc: boolean };
-	show: "open" | "all";
+	show: "active" | "archived";
 	dialog?: Dialog;
 };
 
-export const initialView = (): View => ({ query: "", filters: {}, sort: { key: "due", desc: false }, show: "open" });
+export const initialView = (): View => ({ query: "", filters: {}, show: "active" });
 
 const NONE = "__none";
 
 // ── shared helpers ──────────────────────────────────────────────────────
 
-/** A task is done when its Status label says Done. */
-export function isDone(data: Data, task: Task) {
-	const status = data.labels.find((l) => l.name.toLowerCase() === "status");
-	const value = status && task.labels[status.id];
-	return typeof value === "string" && value.toLowerCase() === "done";
-}
-
-/** The task's labels as colored pills, in label order. Bool labels show their name. */
+/** The task's labels as colored pills, in label order. Yes/no labels show their name. */
 export function tags(data: Data, task: Task): Tag[] {
 	return data.labels.flatMap((label) => {
 		const value = task.labels[label.id];
@@ -39,50 +33,6 @@ export function tags(data: Data, task: Task): Tag[] {
 		return [{ text: value === true ? label.name : String(value), color: label.color, tooltip: value === true ? undefined : label.name }];
 	});
 }
-
-const optionValue = (value: string | boolean) => (value === true ? "yes" : String(value));
-
-function filterOptions(data: Data, label: Label): string[] {
-	if (label.type === "bool") return ["yes"];
-	const used = data.tasks.map((t) => t.labels[label.id]).filter((v): v is string => typeof v === "string");
-	return [...new Set([...label.values, ...used.sort()])];
-}
-
-function visibleTasks(data: Data, view: View) {
-	const s = search(view.query);
-	const tasks = data.tasks.filter((task) => {
-		if (view.show === "open" && isDone(data, task)) return false;
-		for (const [id, values] of Object.entries(view.filters)) {
-			if (!values.length) continue;
-			const value = task.labels[id.slice("label:".length)];
-			if (value === undefined || !values.includes(optionValue(value))) return false;
-		}
-		return s.test([`#${task.id}`, task.name, task.desc, ...tags(data, task).map((t) => t.text)]);
-	});
-	const { key, desc } = view.sort;
-	const value = (t: Task): number | string =>
-		key === "name" ? t.name.toLowerCase() : key === "due" ? (t.due ? dueAt(t.due) : Number.POSITIVE_INFINITY) : key === "updated" ? t.updated : t.id;
-	tasks.sort((a, b) => {
-		const [x, y] = [value(a), value(b)];
-		const order = x < y ? -1 : x > y ? 1 : a.id - b.id;
-		return desc ? -order : order;
-	});
-	return { tasks, highlight: s.highlight() };
-}
-
-const name = (data: Data, id: number) => {
-	const task = data.tasks.find((t) => t.id === id);
-	return task ? `#${id} ${task.name}` : `#${id}`;
-};
-
-// ── tasks screen ────────────────────────────────────────────────────────
-
-const TASK_ACTIONS: Action[] = [
-	{ id: "edit", label: "Edit", icon: "pencil", key: "e", inline: true, group: "edit" },
-	{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit" },
-	{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
-	{ id: "delete", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this task and its relations?", group: "delete" },
-];
 
 /** The description's first line as plain text. */
 export const snippet = (markdown: string) =>
@@ -94,46 +44,174 @@ export const snippet = (markdown: string) =>
 		.replace(/[*_`~]/g, "")
 		.trim() || undefined;
 
-function dueCell(data: Data, task: Task, now: number): Cell {
+/** "1h 25m", "40m", "under a minute". */
+export function spent(ms: number) {
+	const minutes = Math.floor(ms / 60_000);
+	if (minutes < 1) return "under a minute";
+	const h = Math.floor(minutes / 60);
+	return h ? `${h}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+const optionValue = (value: string | boolean) => (value === true ? "yes" : String(value));
+
+function filterOptions(data: Data, label: Label): string[] {
+	if (label.type === "bool") return ["yes"];
+	const used = data.tasks.map((t) => t.labels[label.id]).filter((v): v is string => typeof v === "string");
+	return [...new Set([...label.values, ...used.sort()])];
+}
+
+const taskName = (data: Data, id: number) => {
+	const task = data.tasks.find((t) => t.id === id);
+	return task ? `#${id} ${task.name}` : `#${id}`;
+};
+
+/** Overdue: past due and not settled. */
+export const isOverdue = (task: Task, now: number) => !!task.due && task.state !== "settled" && dueAt(task.due) < now;
+
+/** What the plugin badge counts: open tasks that are unread or overdue. */
+export const attention = (data: Data, now: number) => data.tasks.filter((t) => !t.archived && t.state !== "settled" && (t.unread || isOverdue(t, now))).length;
+
+function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search>) {
+	for (const [id, values] of Object.entries(view.filters)) {
+		if (!values.length) continue;
+		const value = task.labels[id.slice("label:".length)];
+		if (value === undefined || !values.includes(optionValue(value))) return false;
+	}
+	return s.test([`#${task.id}`, task.name, task.desc, ...tags(data, task).map((t) => t.text)]);
+}
+
+// ── actions ─────────────────────────────────────────────────────────────
+
+/** Every task action; each row offers the ones that fit its state. */
+export function taskActions(now: number): Action[] {
+	return [
+		{ id: "start", label: "Start working on this", icon: "play", key: "w", inline: true, group: "flow" },
+		{ id: "done", label: "Done for now", icon: "inbox", key: "d", inline: true, group: "flow" },
+		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "w", inline: true, group: "flow" },
+		{ id: "unsettle", label: "Un-settle", icon: "rotate-ccw", key: "s", inline: true, group: "flow" },
+		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
+		{
+			id: "snooze",
+			label: "Snooze…",
+			icon: "alarm-clock",
+			key: "z",
+			group: "flow",
+			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
+		},
+		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
+		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
+		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit" },
+		{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit" },
+		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
+		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
+		{ id: "mark-read", label: "Mark read", icon: "mail-open", key: "u", group: "edit" },
+		{ id: "up", label: "Move up", icon: "arrow-up", key: "alt+up", group: "order" },
+		{ id: "down", label: "Move down", icon: "arrow-down", key: "alt+down", group: "order" },
+		{ id: "archive", label: "Archive", icon: "archive", key: "a", group: "other" },
+		{ id: "unarchive", label: "Unarchive", icon: "archive-restore", key: "a", group: "other" },
+		{ id: "delete", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this task and its relations?", group: "other" },
+	];
+}
+
+/** The action ids a task offers, from its state. */
+export function actionsFor(data: Data, task: Task): string[] {
+	if (task.archived) return ["unarchive", "edit", "delete"];
+	const section = sectionOf(task);
+	const ids: string[] = [];
+	if (task.state === "inbox") ids.push("start");
+	if (task.state === "working") ids.push("done");
+	if (task.state === "snoozed") ids.push("wake");
+	if (task.state === "settled") ids.push("unsettle");
+	else ids.push("settle", "snooze", task.pinned ? "unpin" : "pin");
+	ids.push("edit", "relate");
+	if (relationsOf(data, task.id).length) ids.push("unrelate");
+	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
+	if (section === "pinned" || section === "inbox" || section === "working") ids.push("up", "down");
+	ids.push("archive", "delete");
+	return ids;
+}
+
+// ── tasks screen ────────────────────────────────────────────────────────
+
+export const SECTIONS: (Section & { id: SectionId })[] = [
+	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks to keep them on top", dropLabel: "Pin", dropIcon: "pin" },
+	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
+	{ id: "working", label: "Working", icon: "play", empty: "Not working on anything", dropLabel: "Start working", dropIcon: "play" },
+	{ id: "snoozed", label: "Snoozed", icon: "alarm-clock", empty: "Nothing snoozed", order: false },
+	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
+];
+
+function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
-	const overdue = dueAt(task.due) < now && !isDone(data, task);
+	const overdue = isOverdue(task, now);
 	return { text: formatDue(task.due), tone: overdue ? "danger" : undefined, icon: overdue ? "alarm-clock" : undefined };
+}
+
+/** The moment that matters for the task's section. */
+function whenCell(task: Task): Cell {
+	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: "alarm-clock" };
+	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: "check" };
+	const since = workingSince(task);
+	if (since) return { text: "", at: since, icon: "play" };
+	return { text: "", at: task.updated };
 }
 
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
-	const details: DetailItem[] = [
+	const since = workingSince(task);
+	const worked = timeSpent(task, now);
+	const state: DetailItem[] = [
 		{ section: "Task", label: "ID", value: `#${task.id}`, mono: true, copy: true },
+		...(task.unread && task.unreadReason ? [{ section: "Task", label: "New", value: task.unreadReason, dot: "sky" as const }] : []),
+		...(since ? [{ section: "Task", label: "Working since", value: new Date(since).toLocaleString() }] : []),
+		...(task.snoozedUntil ? [{ section: "Task", label: "Snoozed until", value: new Date(task.snoozedUntil).toLocaleString() }] : []),
+		...(task.settledAt ? [{ section: "Task", label: "Settled", value: new Date(task.settledAt).toLocaleString() }] : []),
+		...(worked ? [{ section: "Task", label: "Time spent", value: `${spent(worked)} in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` }] : []),
+		{ section: "Task", label: "Due", value: task.due ? formatDue(task.due) : "No due date", tone: isOverdue(task, now) ? "danger" : undefined },
 		{ section: "Task", label: "Created", value: new Date(task.created).toLocaleString() },
 		{ section: "Task", label: "Last updated", value: new Date(task.updated).toLocaleString() },
-		{ section: "Task", label: "Due", value: task.due ? formatDue(task.due) : "No due date" },
+	];
+	const details: DetailItem[] = [
+		...state,
 		...data.labels
 			.filter((l) => task.labels[l.id] !== undefined)
 			.map((l): DetailItem => ({ section: "Labels", label: l.name, value: task.labels[l.id] === true ? "Yes" : String(task.labels[l.id]), dot: l.color })),
-		...relations.map((r): DetailItem => ({ section: "Related tasks", label: r.label, value: name(data, r.task) })),
+		...relations.map((r): DetailItem => ({ section: "Related tasks", label: r.label, value: taskName(data, r.task) })),
 		...(task.desc.trim() ? [{ section: "Description", label: "Markdown", value: task.desc }] : []),
 	];
 	return {
 		id: String(task.id),
+		group: task.archived ? undefined : sectionOf(task),
+		unread: task.unread || undefined,
+		// The first cell titles the details drawer.
 		cells: {
+			name: {
+				text: task.name,
+				tags: tags(data, task),
+				sub: task.unread && task.unreadReason ? task.unreadReason : snippet(task.desc),
+				marks: task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "Working on it", color: "sky" }] : undefined,
+			},
 			id: { text: `#${task.id}`, mono: true },
-			name: { text: task.name, tags: tags(data, task), sub: snippet(task.desc) },
-			due: dueCell(data, task, now),
-			updated: { text: "", at: task.updated },
+			due: dueCell(task, now),
+			when: whenCell(task),
 		},
 		details,
-		actions: TASK_ACTIONS.filter((a) => a.id !== "unrelate" || relations.length).map((a) => a.id),
+		actions: actionsFor(data, task),
 		targets: relations.length
-			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${name(data, r.task)}`, icon: "link" })) }
+			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }
 			: undefined,
 	};
 }
 
 export function tasksScreen(data: Data, view: View, now: number): Node {
-	const { tasks, highlight } = visibleTasks(data, view);
+	const s = search(view.query);
+	const archived = view.show === "archived";
+	const pool = data.tasks.filter((t) => t.archived === archived);
+	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : SECTIONS.flatMap((sec) => inSection(data, sec.id));
+	const shown = ordered.filter((t) => matches(data, view, t, s));
 	const filters: Filter[] = data.labels.map((label) => {
 		const counts = new Map<string, number>();
-		for (const t of data.tasks) {
+		for (const t of pool) {
 			const v = t.labels[label.id];
 			if (v !== undefined) counts.set(optionValue(v), (counts.get(optionValue(v)) ?? 0) + 1);
 		}
@@ -145,12 +223,16 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 			selected: view.filters[`label:${label.id}`] ?? [],
 		};
 	});
-	const open = data.tasks.filter((t) => !isDone(data, t)).length;
+	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled");
+	const unread = open.filter((t) => t.unread).length;
+	const summary = archived
+		? `${shown.length} archived`
+		: `${open.length} open${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
 	return {
 		type: "page",
 		search: { placeholder: "Search tasks" },
-		summary: `${tasks.length} of ${data.tasks.length} task${data.tasks.length === 1 ? "" : "s"} · ${open} open`,
-		highlight,
+		summary,
+		highlight: s.highlight(),
 		filters,
 		controls: [
 			{
@@ -159,8 +241,8 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				label: "Show",
 				value: view.show,
 				options: [
-					{ value: "open", label: "Open", tooltip: "Hide tasks whose Status is Done" },
-					{ value: "all", label: "All" },
+					{ value: "active", label: "Tasks", icon: "list-checks" },
+					{ value: "archived", label: "Archived", icon: "archive", tooltip: "Archived tasks, newest first" },
 				],
 			},
 		],
@@ -168,28 +250,32 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 		children: [
 			{
 				type: "table",
-				id: "tasks",
+				id: archived ? "archived" : "tasks",
 				columns: [
-					{ key: "id", title: "#", mono: true, width: 64, sortable: true, sortDesc: true },
-					{ key: "name", title: "Task", grow: true, sortable: true },
-					{ key: "due", title: "Due", width: 176, sortable: true, priority: 2 },
-					{ key: "updated", title: "Updated", width: 110, sortable: true, sortDesc: true, priority: 3 },
+					// The first column titles the details drawer, so it's the name.
+					{ key: "name", title: "Task", grow: true },
+					{ key: "id", title: "#", mono: true, width: 64, priority: 4 },
+					{ key: "due", title: "Due", width: 176, priority: 2 },
+					{ key: "when", title: "When", width: 120, priority: 3 },
 				],
-				rows: tasks.map((t) => taskRow(data, t, now)),
-				actions: TASK_ACTIONS,
-				sort: view.sort,
-				empty: data.tasks.length
-					? { title: "No matching tasks", description: "Change the search or filters.", icon: "search-x" }
-					: { title: "No tasks yet", description: "Create one with New task.", icon: "list-checks" },
+				...(archived ? {} : { sections: SECTIONS, reorder: true }),
+				selectEvents: true,
+				rows: shown.map((t) => taskRow(data, t, now)),
+				actions: taskActions(now),
+				empty: archived
+					? { title: "Nothing archived", description: "Archive tasks you want out of sight but not deleted.", icon: "archive" }
+					: data.tasks.length
+						? { title: "No matching tasks", description: "Change the search or filters.", icon: "search-x" }
+						: { title: "No tasks yet", description: "Create one with New task.", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog?.kind === "task" || view.dialog?.kind === "relate" ? dialogNode(data, view.dialog) : undefined,
+		dialog: view.dialog && ["task", "relate", "snooze"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
 // ── labels screen ───────────────────────────────────────────────────────
 
-export function labelsScreen(data: Data, view: View): Node {
+export function labelsScreen(data: Data, view: View, now: number): Node {
 	const uses = (label: Label) => data.tasks.filter((t) => t.labels[label.id] !== undefined).length;
 	return {
 		type: "page",
@@ -211,7 +297,7 @@ export function labelsScreen(data: Data, view: View): Node {
 				rows: data.labels.map((label) => ({
 					id: `l${label.id}`,
 					cells: {
-						name: { text: label.name, tags: [{ text: label.color, color: label.color }] },
+						name: { text: label.name, dot: label.color },
 						type: label.type === "bool" ? "Yes/no" : label.freeform ? "Free text" : "Lookup",
 						values: label.values.length
 							? { text: "", tags: label.values.map((v) => ({ text: v, color: label.color })), sub: label.freeform ? "suggestions" : undefined }
@@ -236,7 +322,7 @@ export function labelsScreen(data: Data, view: View): Node {
 				rows: data.relationTypes.map((t) => ({
 					id: `r${t.id}`,
 					cells: {
-						name: { text: t.name, sub: t.id, mono: false },
+						name: { text: t.name, sub: t.id },
 						inverse: t.inverse,
 						uses: data.tasks.reduce((n, task) => n + task.relations.filter((r) => r.type === t.id).length, 0),
 					},
@@ -248,39 +334,40 @@ export function labelsScreen(data: Data, view: View): Node {
 				empty: { title: "No relation types", icon: "link" },
 			},
 		],
-		dialog: view.dialog?.kind === "label" || view.dialog?.kind === "relationType" ? dialogNode(data, view.dialog) : undefined,
+		dialog: view.dialog && ["label", "relationType"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
 // ── dialogs ─────────────────────────────────────────────────────────────
 
-function labelField(label: Label, value: string | boolean | undefined): Field {
-	const id = `label:${label.id}`;
-	if (label.type === "bool") return { type: "switch", id, label: label.name, value: value === true };
-	if (label.freeform)
-		return {
-			type: "text",
-			id,
-			label: label.name,
-			value: typeof value === "string" ? value : "",
-			placeholder: label.values.length ? label.values.join(", ") : "Any text",
-		};
-	return {
-		type: "select",
-		id,
-		label: label.name,
-		value: typeof value === "string" ? value : NONE,
-		options: [{ value: NONE, label: "—" }, ...label.values.map((v) => ({ value: v, label: v }))],
-	};
+/** Labels as the pill editor's keys: yes/no labels are flags, lookups pick from their values. */
+export function tagKeys(data: Data): TagKey[] {
+	return data.labels.map((l) => ({
+		key: String(l.id),
+		label: l.name,
+		color: l.color,
+		...(l.type === "bool" ? { flag: true } : { values: l.values, freeform: l.freeform }),
+	}));
 }
+
+export const toTagValues = (labels: Task["labels"]): TagValue[] =>
+	Object.entries(labels).map(([key, value]) => (value === true ? { key } : { key, value: String(value) }));
+
+export const fromTagValues = (values: TagValue[]): Task["labels"] => Object.fromEntries(values.map((v) => [v.key, v.value === undefined ? true : v.value]));
 
 export const fieldValue = (value: unknown) => (value === NONE ? "" : value);
 
 const save: Action = { id: "save", label: "Save", primary: true };
 const error = (text?: string): Node[] => (text ? [{ type: "text", text, tone: "danger" }] : []);
 
-function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
-	if (!dialog) return undefined;
+/** The default custom snooze: tomorrow at 9:00, local time. */
+export function defaultSnooze(now: number) {
+	const d = new Date(now);
+	const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+	return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}T09:00`;
+}
+
+function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 	switch (dialog.kind) {
 		case "task": {
 			const d = dialog.draft;
@@ -297,12 +384,11 @@ function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
 						id: "task",
 						fields: [
 							{ type: "text", id: "name", label: "Name", value: d.name, placeholder: "What needs doing" },
-							{ type: "text", id: "due", label: "Due", value: d.due, placeholder: "2026-11-20 or 2026-11-20 14:30", description: "Time is optional." },
-							{ type: "text", id: "desc", label: "Description", value: d.desc, placeholder: "Markdown", description: "Markdown; previewed below." },
-							...data.labels.map((l) => labelField(l, d.labels[l.id])),
+							{ type: "datetime", id: "due", label: "Due", value: d.due, description: "Time is optional." },
+							{ type: "tags", id: "labels", label: "Labels", value: toTagValues(d.labels), keys: tagKeys(data) },
+							{ type: "textarea", id: "desc", label: "Description", value: d.desc, markdown: true, rows: 8, placeholder: "Markdown: # heading, **bold**, - list, [link](https://…)" },
 						],
 					},
-					...(d.desc.trim() ? [{ type: "card", title: "Description preview", children: [{ type: "markdown", text: d.desc }] } satisfies Node] : []),
 				],
 			};
 		}
@@ -310,7 +396,7 @@ function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
 			const others = data.tasks.filter((t) => t.id !== dialog.from);
 			return {
 				id: "relate",
-				title: `Relate ${name(data, dialog.from)}`,
+				title: `Relate ${taskName(data, dialog.from)}`,
 				actions: [{ ...save, label: "Relate", disabled: !dialog.to }],
 				children: [
 					...error(dialog.error),
@@ -321,21 +407,36 @@ function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
 							{
 								type: "select",
 								id: "type",
-								label: "Relation", description: "As it will read on this task: Parent, Child, Blocked by…",
+								label: "Relation",
+								description: "As it will read on this task: Parent, Child, Blocked by…",
 								value: dialog.type,
 								options: data.relationTypes.flatMap((t) =>
 									t.inverse === t.name ? [{ value: t.id, label: t.name }] : [{ value: t.id, label: t.name }, { value: `~${t.id}`, label: t.inverse }],
 								),
 							},
 							{
-								type: "select",
+								type: "combobox",
 								id: "to",
 								label: "Task",
-								value: dialog.to || NONE,
-								options: [{ value: NONE, label: others.length ? "Choose a task" : "No other tasks" }, ...others.map((t) => ({ value: String(t.id), label: name(data, t.id) }))],
+								value: dialog.to,
+								placeholder: others.length ? "Choose a task" : "No other tasks",
+								options: others.map((t) => ({ value: String(t.id), label: t.name, sub: `#${t.id}${t.state === "settled" ? " · settled" : ""}` })),
 							},
 						],
 					},
+				],
+			};
+		}
+		case "snooze": {
+			const choices = snoozeChoices(now);
+			return {
+				id: "snooze",
+				title: `Snooze ${taskName(data, dialog.id)}`,
+				description: `It comes back to the top of the Inbox, marked unread. ${choices.map((c) => c.label).join(", ")} are also in the Snooze menu.`,
+				actions: [{ ...save, label: "Snooze", disabled: !dialog.until }],
+				children: [
+					...error(dialog.error),
+					{ type: "form", id: "snooze", fields: [{ type: "datetime", id: "until", label: "Until", value: dialog.until, description: "A date alone means 9:00 that day." }] },
 				],
 			};
 		}
@@ -353,7 +454,7 @@ function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
 						fields: [
 							{ type: "text", id: "name", label: "Name", value: d.name },
 							{ type: "select", id: "type", label: "Type", value: d.type, options: [{ value: "string", label: "Text" }, { value: "bool", label: "Yes/no" }] },
-							{ type: "select", id: "color", label: "Color", value: d.color, options: HUES.map((h) => ({ value: h, label: h[0]!.toUpperCase() + h.slice(1) })) },
+							{ type: "color", id: "color", label: "Color", value: (HUES as readonly string[]).includes(d.color) ? (d.color as (typeof HUES)[number]) : "blue" },
 							...(d.type === "string"
 								? ([
 										{ type: "text", id: "values", label: "Values", value: d.values, placeholder: "High, Medium, Low", description: "Comma-separated lookup list." },
@@ -387,27 +488,35 @@ function dialogNode(data: Data, dialog?: Dialog): DialogNode | undefined {
 
 // ── quick view ──────────────────────────────────────────────────────────
 
-/** Open tasks with a due date, soonest first; the overdue ones are red. */
+/**
+ * The menu-bar focus list: what you're working on, then Pinned and the Inbox in your order.
+ * Unread tasks are bold; overdue ones get a red dot. Enter opens the task in the main window.
+ */
 export function quickView(data: Data, now: number): Node {
-	const due = data.tasks
-		.filter((t) => t.due && !isDone(data, t))
-		.sort((a, b) => dueAt(a.due!) - dueAt(b.due!))
-		.slice(0, 12);
+	const working = inSection(data, "working");
+	const pinnedWorking = inSection(data, "pinned").filter((t) => t.state === "working");
+	const waiting = [...inSection(data, "pinned").filter((t) => t.state !== "working"), ...inSection(data, "inbox")];
+	const item = (t: Task) => {
+		const since = workingSince(t);
+		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
+		const subtitle = since ? [`Working · ${spent(now - since)}`, labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || labels || undefined;
+		return {
+			id: String(t.id),
+			title: t.name,
+			subtitle,
+			icon: since ? "play" : t.pinned ? "pin" : undefined,
+			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
+			...(t.due ? { metaAt: dueAt(t.due) } : {}),
+			unread: t.unread || undefined,
+			actions: since
+				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, { id: "settle", label: "Settle", icon: "check", key: "s" }]
+				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, { id: "settle", label: "Settle", icon: "check", key: "s" }],
+		};
+	};
 	return {
 		type: "list",
-		id: "due",
-		items: due.map((t) => {
-			const at = dueAt(t.due!);
-			return {
-				id: String(t.id),
-				title: t.name,
-				subtitle: tags(data, t).map((tag) => tag.text).join(" · ") || undefined,
-				dot: at < now ? "danger" : at - now < 86_400_000 ? "warning" : "muted",
-				metaAt: at,
-			};
-		}),
-		empty: { title: "Nothing due", description: "Open tasks with a due date show here.", icon: "calendar-check" },
+		id: "focus",
+		items: [...pinnedWorking, ...working, ...waiting].slice(0, 15).map(item),
+		empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
 	};
 }
-
-export const overdue = (data: Data, now: number) => data.tasks.filter((t) => t.due && dueAt(t.due) < now && !isDone(data, t)).length;

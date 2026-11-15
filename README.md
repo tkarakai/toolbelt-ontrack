@@ -9,20 +9,41 @@ In Toolbelt's plugin manager, enter `tkarakai/toolbelt-ontrack`, review the rele
 and approve execution. Plugin code runs with your user privileges; process isolation is not a
 security sandbox.
 
-- **Tasks** lists your tasks with their labels as colored pills, due dates (overdue in red) and
-  last update. Search matches names, descriptions and label values; each label is a toolbar
-  filter. **Open** hides tasks whose Status is Done. Select a task to see its details, labels,
-  related tasks and description in the drawer. **Edit** (E), **Relate to…** (R), **Remove
-  relation** and **Delete** act on the selected task.
-- **Labels** defines labels and relation types.
-- The menu-bar quick view lists open tasks with a due date, soonest first. The plugin badge counts
-  overdue open tasks.
+OnTrack borrows the shape of T3 Code's thread list. You play the agent's part today; the model
+keeps room for a real agent later.
+
+- **Tasks** shows five sections. **Pinned** stays on top in your order. **Inbox** holds open tasks
+  in your order; new tasks and tasks that come back land at the top. **Working** is what you're
+  doing now, in your order. **Snoozed** is hidden until its wake time, soonest first. **Settled**
+  (done) is a collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
+  *Archived* in the toolbar to see them.
+- **Start working on this** (W) moves a task to Working, like sending an agent a message.
+  **Done for now** (D) sends it back to the top of the Inbox, unread, like an agent finishing its
+  turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
+  9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Pin/Unpin** (P), **Mark
+  read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Relate to…** (R)
+  and **Delete** act on the selected task. Settle, snooze, unpin, archive and delete offer
+  **Undo** for five seconds.
+- **Drag** tasks within Pinned, Inbox and Working to order them, or between sections: into Pinned
+  pins, into Working starts work, Working → Inbox is Done for now, onto Settled settles, out of
+  Snoozed wakes, out of Settled un-settles. Nothing drops into Snoozed, which needs a wake time.
+- **Unread** tasks are bold with a blue dot and say why: back from Working, the snooze ended, the
+  due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
+  task marks it read. Nothing settles on its own.
+- Search matches names, descriptions and label values; each label is a toolbar filter. The
+  details drawer shows state, time spent, labels, related tasks and the description.
+- **Labels** defines labels (with color swatches) and relation types.
+- The menu-bar **quick view** is a focus list: what you're working on (with elapsed time), then
+  Pinned and the Inbox in your order, with Done for now / Start working and Settle buttons. Enter
+  opens the task in the main window. The plugin badge counts open tasks that are unread or
+  overdue.
 
 ### Tasks
 
 A task has an automatic ID, a name, created and last-updated times, an optional due date with an
-optional time (`2026-11-20` or `2026-11-20 14:30`, local time; a date alone is due at the end of
-that day), a Markdown description, at most one value per label, and relations to other tasks.
+optional time (local time; a date alone is due at the end of that day), a Markdown description
+edited with live styling, at most one value per label (edited as colored pills), relations to
+other tasks, and its place in the sections above, including work sessions for time spent.
 
 ### Labels
 
@@ -32,8 +53,8 @@ A label has a name, a color and a type:
 - **Lookup** labels pick one value from their list (Priority: High, Medium, Low).
 - **Free text** labels accept any value; their list, if any, holds suggestions (Project).
 
-A fresh install has Project, isPersonal, Priority and Status. The label's color is used for its
-pills, filter dots and details. Narrowing a lookup list or deleting a label removes the values
+A fresh install has Project, isPersonal, Priority and Status (Todo, In progress, Blocked; done is
+Settled). The label's color is used for its pills, filter dots and details. Narrowing a lookup list or deleting a label removes the values
 tasks can no longer have.
 
 ### Relations
