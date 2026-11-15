@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Tasks have **updates**: a series of Markdown notes, each with when it was added and when it was last updated. Add update (⇧U) opens the task's updates with an editor on top (⌘Return adds, and the editor is ready for the next one) and every update below, newest first. Tab into the list, use ↑/↓, E to edit an update (its text and both times) and ⌫ to delete it; deleting can be undone. The details drawer lists the updates with their own Edit and Delete buttons, and search finds tasks by their updates.
+- Due dates and snooze times use Toolbelt's new date picker. An empty due date now reads “No due date” instead of showing a date. Type dates like “fri 5pm”, “+3d” or “nov 20”, pick a quick choice (Snooze offers its menu's times), or use the arrow and Page keys in the calendar.
+- Due dates read as “Today · 5:00 PM”, “Tomorrow” or “Fri, Nov 20”, and the details drawer shows times as “Nov 14, 9:30 AM”. Descriptions in the drawer are shown as formatted Markdown.
+- Requires Toolbelt 0.3.11 (SDK 0.3.7). Existing data is upgraded: every task starts with no updates.
 
 ## 0.2.0 — 2026-11-15
 - The task list reads like a document: one background, no lines between rows, rounded hovered and selected rows. Sections, nesting, dragging and the details drawer work as before.
