@@ -26,7 +26,7 @@ read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.spl
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
 `ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer) and `ui.composer`
 (update boxes, the quick view's New task line and its Add update prompt). The package is portable
-JavaScript, uses SDK 0.3.8 and needs Toolbelt 0.3.12 or newer.
+JavaScript, uses SDK 0.3.8 and needs Toolbelt 0.3.13 or newer.
 
 Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
 heading, status, due, labels, description), a facts line, a Related section and an Updates

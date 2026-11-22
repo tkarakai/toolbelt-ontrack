@@ -15,6 +15,7 @@
 - **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (W) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in a Watching group under Progressing, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
 - At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Watch it again (W, also in the quick view, which opens the window) to say you're still waiting: the dialog proposes the next date on the schedule and takes an optional note, logs the check as an update and sends the task back. Starting work, settling or P in Watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
 - Existing data is upgraded to schema 4.
+- Requires Toolbelt 0.3.13 (SDK 0.3.8).
 
 ## 0.4.0 — 2026-11-15
 - Edit tasks right in the details drawer, without a dialog. The drawer is redesigned to be dense and to show each thing once: a bar of action icons, the name in large type (click it or press E to rename), Status, Due and Labels as quiet properties you change in place, the description as formatted text that becomes an editor when you click it, one line of facts (ID, time worked, created, changed), related tasks, and the updates.
