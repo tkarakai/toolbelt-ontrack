@@ -34,49 +34,6 @@ describe("sections", () => {
 		expect(() => life.startWorking(d, a, NOW)).toThrow(m.InvalidInput);
 	});
 
-	test("Pinned shows pinned tasks again: they stay at home, wherever that is, settled too", () => {
-		const { d, ids } = setup();
-		const [a, b] = ids as [number, number];
-		life.pin(d, b, NOW);
-		expect(names(d, "pinned")).toEqual(["b"]);
-		expect(names(d, "inbox")).toEqual(["c", "b", "a"]);
-		expect(() => life.pin(d, b, NOW)).toThrow(m.InvalidInput);
-		life.startWorking(d, b, NOW);
-		expect(life.sectionOf(m.findTask(d, b))).toBe("working");
-		expect([names(d, "pinned"), names(d, "working")]).toEqual([["b"], ["b"]]);
-		life.doneForNow(d, b, NOW);
-		life.unpin(d, b, NOW);
-		expect(names(d, "pinned")).toEqual([]);
-		expect(names(d, "inbox")[0]).toBe("b");
-		// Settling keeps the pin; Settled can be pinned too. Archiving unpins.
-		life.pin(d, a, NOW);
-		life.settle(d, a, NOW);
-		expect([m.findTask(d, a).pinned, names(d, "pinned"), names(d, "settled")]).toEqual([true, ["a"], ["a"]]);
-		life.unpin(d, a, NOW);
-		life.pin(d, a, NOW);
-		life.archive(d, a, NOW);
-		expect([m.findTask(d, a).pinned, names(d, "pinned")]).toEqual([false, []]);
-	});
-
-	test("Pinned has its own order; drags only reorder it, never pin or unpin", () => {
-		const { d, ids } = setup();
-		const [a, b, c] = ids as [number, number, number];
-		for (const id of [a, b, c]) life.pin(d, id, NOW);
-		expect(names(d, "pinned")).toEqual(["a", "b", "c"]);
-		life.drop(d, c, "pinned", a, NOW, true);
-		expect(names(d, "pinned")).toEqual(["c", "a", "b"]);
-		life.move(d, b, -1, NOW, "pinned");
-		expect(names(d, "pinned")).toEqual(["c", "b", "a"]);
-		// The Inbox order is its own.
-		expect(names(d, "inbox")).toEqual(["c", "b", "a"]);
-		life.move(d, c, 1, NOW);
-		expect(names(d, "inbox")).toEqual(["b", "c", "a"]);
-		expect(() => life.drop(d, a, "pinned", null, NOW)).toThrow(m.InvalidInput);
-		expect(() => life.drop(d, a, "inbox", null, NOW, true)).toThrow(m.InvalidInput);
-		life.unpin(d, a, NOW);
-		expect(() => life.move(d, a, 1, NOW, "pinned")).toThrow(m.InvalidInput);
-	});
-
 	test("snooze hides a task until it wakes, then it's on top and unread", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];

@@ -14,7 +14,7 @@ The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working titled
+The Tasks table declares `appearance: "document"`, `sections` (inbox, working titled
 Progressing, settled), `reorder` and `selectEvents`; New task has key N. Snoozed and Watching
 rows use a group path inside Progressing (`["working", SUBGROUPS.snoozed]`), so they show as
 groups after its own rows, Snoozed first. The host reports drops into those groups as `working`;
@@ -49,7 +49,7 @@ Status. Until the person picks `next`, changing `repeat` moves it to the default
 cadence. Saving it offers Undo.
 
 Row keys: P start/done for now, S settle/un-settle, Z snooze/wake, W watch/change watch, ⇧W
-stop watching, K still waiting (only on a task a check-in brought back), ⇧P pin/unpin, A
+stop watching, K still waiting (only on a task a check-in brought back), A
 archive/unarchive, E edit, ⇧U add update, R relate, U read/unread. Paired actions share a key and
 never appear on the same row.
 
@@ -81,7 +81,7 @@ The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to t
 ## Data
 
 Schema 4 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
-`relationTypes` and `order` (`pinned`, `inbox`, `working`: task ids in the person's order). IDs
+`relationTypes` and `order` (`inbox`, `working`: task ids in the person's order). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
@@ -92,16 +92,12 @@ wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a ti
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
 
-Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `pinned`, `archived`,
+Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `archived`,
 `unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`, `dueAnnounced` (the due value already
 announced, so it's announced once) and `sessions` (`{start, end?, by}`; `by` is `"me"` today and
-leaves room for an agent). A task's home section is its `state` (`sectionOf`). `pinned` is a
-flag on top: Pinned (`inSection(data, "pinned")`) lists every pinned, unarchived task in
-`order.pinned`, and each also shows at home. Its row in Pinned has the id `p<id>` (the home row
-keeps the plain id), group `pinned`, a mark and a chip naming the home (`HOMES`), and `up`/`down`
-that move it within Pinned. Settling keeps the pin; archiving removes it. Drops into or out of
-Pinned are refused (`drop(..., fromPinned)`); drops within it reorder `order.pinned`. Snoozing
-and watching keep a task's Inbox/Working position.
+leaves room for an agent). A task's section is its `state` (`sectionOf`); there is
+no pinning (a yes/no label does that job). Snoozing and watching keep a task's Inbox/Working
+position.
 
 `watch` is `{on?, since, every?, anchor?, next?, checked?, checks}`: who it waits on, when watching
 started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first check-in of the
@@ -120,12 +116,13 @@ all its children are settled. Nothing settles automatically. In active mode a ti
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
 
 Each event works on a clone of the data; a rejected change (`InvalidInput`) restores it and shows
-the message in the open dialog or a toast. Settle, snooze, unpin, archive, delete and deleting an update keep
+the message in the open dialog or a toast. Settle, snooze, watch, still waiting, archive, delete and deleting an update keep
 the previous data for five seconds behind the toast's Undo button. Successful changes are written
 before the event returns, so `prepare` is always ready. Migration upgrades schema 1 (tasks whose
 Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task
-gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (only the schema number
-changes; no task is watched yet).
+gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (no task is watched yet;
+`pinned` and `order.pinned` are dropped, and pinned tasks get a yes/no "Pinned" label, made, or
+reused when one of that name exists, only if some task was pinned).
 
 ## Tests
 

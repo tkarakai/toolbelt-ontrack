@@ -51,7 +51,7 @@ const paneNode = (rowId: string, id: string): any => {
 };
 /** A row's innermost group: its section, or the group inside Progressing (snoozed, watching). */
 const groupOf = (r: any) => (Array.isArray(r.group) ? r.group.at(-1).id : r.group);
-const bySection = () => Object.fromEntries(["pinned", "inbox", "working", "snoozed", "watching", "settled"].map((id) => [id, rows().filter((r) => groupOf(r) === id).map((r) => r.cells.name.text)]));
+const bySection = () => Object.fromEntries(["inbox", "working", "snoozed", "watching", "settled"].map((id) => [id, rows().filter((r) => groupOf(r) === id).map((r) => r.cells.name.text)]));
 const lastBadge = () => host!.messages.filter((m) => m.type === "badge").at(-1);
 const toasts = () => host!.messages.filter((m: any) => m.type === "toast") as any[];
 
@@ -63,7 +63,7 @@ function fixture() {
 
 test("creates a task with the rich fields and saves it on top of the Inbox", async () => {
 	const { saved, event } = await start();
-	expect(table().sections.map((s: any) => s.id)).toEqual(["pinned", "inbox", "working", "settled"]);
+	expect(table().sections.map((s: any) => s.id)).toEqual(["inbox", "working", "settled"]);
 	expect(table()).toMatchObject({ reorder: true, selectEvents: true, appearance: "document" });
 	expect(tree("screen:tasks").actions).toEqual([expect.objectContaining({ id: "new-task", key: "n" })]);
 	await event("new-task");
@@ -115,11 +115,8 @@ test("drag between sections performs the matching transition", async () => {
 	const { saved, event } = await start(fixture());
 	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
-	expect(bySection()).toEqual({ pinned: [], inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
-	// Pinning is ⇧P, not a drag.
-	await event("reorder", { table: "tasks", rowId: "3", section: "pinned", before: null });
-	expect(toasts().at(-1)).toMatchObject({ text: "Pin it with ⇧P: Pinned shows pinned tasks, on top of their own sections.", tone: "error" });
-	expect(saved.at(-1)!.order.pinned).toEqual([]);
+	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
+	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
 	expect(toasts().at(-1)).toMatchObject({ text: "Choose Snooze to pick a wake time.", tone: "error" });
 });
@@ -486,35 +483,3 @@ test("watch a task, see it come back for its check-in with why, and keep waiting
 	expect(toasts().at(-1).text).toMatch(/^Watching #2 · next check-in /);
 });
 
-test("a pinned task shows in Pinned and at home; Pinned names the home and only reorders", async () => {
-	const { saved, event } = await start(fixture());
-	expect(table().actions.find((a: any) => a.id === "pin")).toMatchObject({ key: "shift+p" });
-	await event("pin", { rowId: "1" });
-	await event("pin", { rowId: "2" });
-	await event("start", { rowId: "1" });
-	expect(bySection()).toMatchObject({ pinned: ["Write spec", "Reply to Anna"], inbox: ["Fix login bug", "Reply to Anna"], working: ["Write spec"] });
-	const copy = rows().find((r) => r.id === "p1");
-	expect(copy.group).toBe("pinned");
-	expect(copy.cells.name).toMatchObject({ chips: ["Progressing"], marks: [{ icon: "play", tooltip: "At home in Progressing", color: "sky" }] });
-	expect(copy.actions).toEqual(expect.arrayContaining(["done", "unpin", "up", "down"]));
-	const home = rows().find((r) => r.id === "1");
-	expect(home.cells.name.marks).toEqual([{ icon: "pin", tooltip: "Pinned" }]);
-	expect(home.cells.name.chips).toBeUndefined();
-	// Reorder Pinned by dragging its rows or with ⌥↑; the Inbox keeps its own order.
-	await event("reorder", { table: "tasks", rowId: "p2", section: "pinned", before: "p1" });
-	expect(saved.at(-1)!.order.pinned).toEqual([2, 1]);
-	await event("down", { rowId: "p2" });
-	expect(saved.at(-1)!.order.pinned).toEqual([1, 2]);
-	// A pinned row can't be dragged out; unpinning is ⇧P, from either row.
-	await event("reorder", { table: "tasks", rowId: "p2", section: "inbox", before: null });
-	expect(toasts().at(-1)).toMatchObject({ text: "Unpin it with ⇧P, or drag it in its own section.", tone: "error" });
-	await event("unpin", { rowId: "p2" });
-	expect(bySection().pinned).toEqual(["Write spec"]);
-	// Settled tasks stay pinned and say so.
-	await event("settle", { rowId: "p1" });
-	expect(rows().find((r) => r.id === "p1").cells.name.chips).toEqual(["Settled"]);
-	// Opening the copy marks the task read.
-	await event("mark-unread", { rowId: "1" });
-	await event("select", { table: "tasks", rowId: "p1" });
-	expect(saved.at(-1)!.tasks[0]!.unread).toBe(false);
-});

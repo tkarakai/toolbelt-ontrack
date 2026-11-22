@@ -2,12 +2,12 @@
 
 ## Unreleased
 - **Working is now Progressing.** Snoozed and Watching show as groups inside it, after the tasks in progress, so everything still in motion sits together.
-- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts progressing and is Done for now on a task in progress, S settles and un-settles, Z snoozes and wakes, W watches, ⇧P pins and unpins, A archives. D and the old Wake (W) and Pin (P) keys are gone.
+- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts progressing and is Done for now on a task in progress, S settles and un-settles, Z snoozes and wakes, W watches, A archives. D and the old Wake (W) key are gone.
 - After you create a task, the list selects it.
-- **Pinned shows pinned tasks again instead of taking them away.** A pinned task stays in its own section (marked with a pin) and also shows in Pinned, with an icon and a chip naming its home: Inbox, Progressing, Snoozed, Watching or Settled. Settled tasks can be pinned, and settling no longer unpins. Pin and unpin with ⇧P from either row; dragging only reorders Pinned and no longer pins or unpins.
+- **Pinned is gone.** Labels do the job: give tasks a yes/no label and filter by it. Tasks you had pinned get a yes/no **Pinned** label on upgrade, so you can still find them; delete the label if you don't need it.
 - **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (W) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in a Watching group under Progressing, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
 - At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Still waiting… (K, also in the quick view, which opens the window) asks you to confirm the next check-in, proposing the next date on the schedule, and takes an optional note. Pressed before a check-in has come, it says so and lets you keep the upcoming one. It logs the check as an update and sends the task back. Starting work, settling or Stop watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
-- Existing data is upgraded to schema 4; nothing else changes.
+- Existing data is upgraded to schema 4.
 
 ## 0.4.0 — 2026-11-15
 - Edit tasks right in the details drawer, without a dialog. The drawer is redesigned to be dense and to show each thing once: a bar of action icons, the name in large type (click it or press E to rename), Status, Due and Labels as quiet properties you change in place, the description as formatted text that becomes an editor when you click it, one line of facts (ID, time worked, created, changed), related tasks, and the updates.

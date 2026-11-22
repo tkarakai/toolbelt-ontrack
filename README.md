@@ -12,10 +12,8 @@ security sandbox.
 OnTrack borrows the shape of T3 Code's thread list. You play the agent's part today; the model
 keeps room for a real agent later.
 
-- **Tasks** shows four sections. **Pinned** is on top, in your order: it shows your pinned tasks
-  again, wherever they live, each with an icon and a chip naming its home (Inbox, Progressing,
-  Snoozed, Watching or Settled). A pinned task stays in its home section too, marked with a pin.
-  Pinning is a flag on the task, not a place: **⇧P** pins and unpins, from either row. **Inbox** holds open
+- **Tasks** shows three sections. There is no Pinned section: to keep some tasks in view, give
+  them a yes/no label (say, *Pinned*) and filter by it. **Inbox** holds open
   tasks in your order; new tasks and tasks that come back land at the top. **Progressing** is
   what you're doing now, in your order, followed by two groups at the same level as its tasks:
   **Snoozed**, hidden until its wake time, soonest first, and **Watching**, tasks out of your
@@ -27,28 +25,26 @@ keeps room for a real agent later.
   **Done for now**: back to the top of the Inbox, unread, like an agent finishing its turn.
   **S** settles and un-settles. **Z** snoozes (3 hours, this evening, tomorrow 9:00, next Monday
   9:00 or a custom time) and wakes. **W** watches (or changes a watch), **K** says you're still
-  waiting on a check-in that came due, and **⇧W** stops watching. **⇧P** pins and unpins, **A**
+  waiting on a check-in that came due, and **⇧W** stops watching. **A**
   archives and unarchives. **E** edits, **↵** or **⇧U** adds an update, **R** relates, **U**
   marks read/unread, **⌥↑/⌥↓** move, and **Delete** is in the ⋯ menu. Settle, snooze, watch,
-  still waiting, unpin, archive and delete offer **Undo** for five seconds.
+  still waiting, archive and delete offer **Undo** for five seconds.
 
   | Section | Keys |
   | --- | --- |
-  | Inbox | P start · S settle · Z snooze · W watch · ⇧P pin |
-  | Inbox, back from a check-in | P start · K still waiting · W change watch · ⇧W stop watching · S · Z · ⇧P |
-  | Progressing | P done for now · S settle · Z snooze · W watch · ⇧P pin |
-  | Snoozed | Z wake · S settle · W watch · ⇧P pin |
-  | Watching | W change watch · ⇧W stop watching · S settle · ⇧P pin |
-  | Settled | S un-settle · W watch · ⇧P pin |
-  | Pinned | the keys of the task's home section, and ⇧P unpin · ⌥↑/⌥↓ move within Pinned |
+  | Inbox | P start · S settle · Z snooze · W watch |
+  | Inbox, back from a check-in | P start · K still waiting · W change watch · ⇧W stop watching · S · Z |
+  | Progressing | P done for now · S settle · Z snooze · W watch |
+  | Snoozed | Z wake · S settle · W watch |
+  | Watching | W change watch · ⇧W stop watching · S settle |
+  | Settled | S un-settle · W watch |
   | Archived | A unarchive · E edit · ⇧U add update |
 
-- **Drag** tasks within Pinned, Inbox and Progressing to order them, or between sections: into
+- **Drag** tasks within the Inbox and Progressing to order them, or between sections: into
   Progressing starts it, Progressing → Inbox is Done for now, onto Settled
   settles, out of Snoozed wakes, out of Settled un-settles. Into the Watching group watches weekly
   (a task that was already watched asks to confirm, as Still waiting does); out of it stops
-  watching. Nothing drops into Snoozed, which needs a wake time. Pinned only reorders: dragging
-  into or out of it is refused, since pinning and unpinning are ⇧P. A drop just above a group's
+  watching. Nothing drops into Snoozed, which needs a wake time. A drop just above a group's
   header belongs to what's above it; a drop at the very end of Progressing joins its last group.
 - **Unread** tasks are bold with a blue dot and say why: back from Progressing, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
@@ -59,8 +55,7 @@ keeps room for a real agent later.
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
 - The menu-bar **quick view** is a focus list: what's in progress (with elapsed time and its
-  latest update; pinned first), then the pinned Inbox tasks in Pinned order and the rest of the
-  Inbox in your order. Without opening the window you can
+  latest update), then the Inbox in your order. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop progressing (P), add an update (U, then ↵),
   snooze until tomorrow 9:00 (Z), settle (S) and, on a check-in, say you're still waiting (K,
   which opens the main window to confirm the next check-in). Enter opens the task in the main window. The
@@ -71,14 +66,14 @@ keeps room for a real agent later.
 The details drawer edits the selected task in place; there's no dialog to open. → moves into it
 (opening it if it's closed) and Esc comes back to the list. From top to bottom:
 
-- A bar of icons for the task's main actions (Start, Settle, Snooze, Pin…), with every action in
+- A bar of icons for the task's main actions (Start, Settle, Snooze, Watch…), with every action in
   the ⋯ menu.
 - The **name**, large: click it (or press E on the task) to rename it; ↵ saves, Esc puts it back.
 - **Status**, **Due** and **Labels**, which read as text until you point at them: pick a status
   (Snooze asks until when), a due date, or add, change and remove label pills.
 - The **description**, formatted: click it or press ↵ on it to edit the Markdown; leaving it or
   ⌘↵ saves, Esc puts it back.
-- One quiet line of facts: the ID, pinned or archived, time worked, when it was created and
+- One quiet line of facts: the ID, archived, time worked, when it was created and
   changed. Related tasks follow when there are any.
 - **Updates**: ↵ on a task in the list lands in the update box (or ⇧U). Write, press ⌘↵, and the
   box is ready for the next one. Below, every update, newest first: Tab into them, move with

@@ -60,9 +60,17 @@ test("migration seeds once and keeps existing data", async () => {
 		expect((await migrate(2)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks can now have updates", "Tasks can now be watched"]);
 		expect(load(dir)).toMatchObject({ schema: 4, nextUpdateId: 1, tasks: [{ name: "old", state: "inbox", updates: [] }] });
 		// Schema 3 data can be watched.
-		writeFileSync(join(dir, FILE), JSON.stringify({ ...load(dir), schema: 3 }));
+		const three = load(dir);
+		writeFileSync(join(dir, FILE), JSON.stringify({ ...three, schema: 3, order: { ...three.order, pinned: [] } }));
 		expect((await migrate(3)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks can now be watched"]);
 		expect(load(dir)).toMatchObject({ schema: 4, tasks: [{ name: "old", state: "inbox" }] });
+		// Pins become the Pinned label.
+		writeFileSync(join(dir, FILE), JSON.stringify({ ...three, schema: 3, order: { ...three.order, pinned: [1] }, tasks: three.tasks.map((t) => ({ ...t, pinned: true })) }));
+		expect((await migrate(3)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks can now be watched", "Pinned tasks now carry the Pinned label"]);
+		const after = load(dir);
+		const label = after.labels.find((l) => l.name === "Pinned")!;
+		expect(after.tasks[0]!.labels[label.id]).toBe(true);
+		expect(after.order).toEqual({ inbox: three.order.inbox, working: three.order.working });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

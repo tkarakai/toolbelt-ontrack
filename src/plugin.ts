@@ -92,9 +92,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	/** Returns true when the data changed. */
 	function onEvent(surface: string, name: string, p: any, c: Context, before: Data): boolean {
 		const dialog = view.dialog;
-		// Task rows are the task id, or `p<id>` for a pinned task's copy in Pinned; labels `l<id>`.
-		const rowId = () => Number(String(p?.rowId ?? "").replace(/^[lrp]/, ""));
-		const inPinned = () => /^p\d+$/.test(String(p?.rowId ?? ""));
+		const rowId = () => Number(String(p?.rowId ?? "").replace(/^[lr]/, ""));
 		const t = now();
 		const name2 = (id: number) => `#${id}`;
 		/** The task and update an update action is about: from the timeline or a drawer item. */
@@ -131,12 +129,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				const id = rowId();
 				const task = model.findTask(data, id);
 				const watched = task.state === "watching";
-				const at = p?.before ? Number(String(p.before).replace(/^p/, "")) : null;
-				// Pinned is pinned tasks again: reorder it there; pin and unpin with ⇧P.
-				if (inPinned() || p?.section === "pinned") {
-					life.drop(data, id, p?.section as life.SectionId, at, t, inPinned());
-					return true;
-				}
+				const at = p?.before ? Number(p.before) : null;
 				const section = life.dropSection(data, p?.section as life.SectionId, at, id);
 				// Back into Watching after a check-in: confirm the next one, as Still waiting does.
 				if (section === "watching" && task.watch && !watched && task.state !== "working") {
@@ -229,13 +222,6 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			case "stop-watching":
 				life.stopWatching(data, rowId(), t);
 				return true;
-			case "pin":
-				life.pin(data, rowId(), t);
-				return true;
-			case "unpin":
-				life.unpin(data, rowId(), t);
-				offerUndo(c, `Unpinned ${name2(rowId())}`, before);
-				return true;
 			case "archive":
 				life.archive(data, rowId(), t);
 				offerUndo(c, `Archived ${name2(rowId())}`, before);
@@ -251,7 +237,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				return true;
 			case "up":
 			case "down":
-				return life.move(data, rowId(), name === "up" ? -1 : 1, t, inPinned() ? "pinned" : undefined);
+				return life.move(data, rowId(), name === "up" ? -1 : 1, t);
 			// ── editing ──
 			case "new-task":
 				view.dialog = { kind: "task", draft: { name: "", due: "", desc: "", labels: {} } };

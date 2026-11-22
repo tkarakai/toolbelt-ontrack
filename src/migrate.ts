@@ -1,6 +1,6 @@
 // Managed-data migration. Schema 2 added the task lifecycle (sections, pin, unread, snooze,
 // settle, archive, work sessions); schema 3 adds progress notes (updates) to tasks; schema 4 adds
-// watching. Retry-safe: data already at schema 4 is validated and kept.
+// watching and turns pins into a label. Retry-safe: data already at schema 4 is validated and kept.
 import { defineMigration } from "@toolbelt/sdk";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,8 +25,10 @@ defineMigration(({ toSchema, fromSchema, targetDir, progress }) => {
 		progress("Tasks can now have updates");
 	}
 	if (raw?.schema === 3) {
+		const pinned = Array.isArray(raw.tasks) && raw.tasks.some((t: { pinned?: boolean }) => t.pinned);
 		save(targetDir, upgrade3to4(raw));
 		progress("Tasks can now be watched");
+		if (pinned) progress("Pinned tasks now carry the Pinned label");
 		return;
 	}
 	load(targetDir);
