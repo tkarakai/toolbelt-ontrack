@@ -6,7 +6,7 @@ import type { Context, PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen,tasksScreen, updateDraft, watchDialog, type View } from "./ui";
+import { attention, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
@@ -62,7 +62,9 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			const to = String(value);
 			if (to === task.state) return false;
 			if (to === "snoozed") {
-				view.dialog = { kind: "snooze", id: task.id, until: defaultSnooze(t) };
+				const blocked = life.cantSnooze(task);
+				if (blocked) throw new InvalidInput(blocked);
+				view.dialog = snoozeDialog(task, t);
 				return false;
 			}
 			if (to === "watching") {
@@ -131,14 +133,19 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				const watched = task.state === "watching";
 				const at = p?.before ? Number(p.before) : null;
 				const section = life.dropSection(data, p?.section as life.SectionId, at, id);
-				// Back into Watching after a check-in: confirm the next one in the Watch dialog.
-				if (section === "watching" && task.watch && !watched && task.state !== "working") {
+				// Into Snoozed or Watching: the same dialog as Z or W, to pick the time.
+				if (section === "snoozed" && task.state !== "snoozed") {
+					const blocked = life.cantSnooze(task);
+					if (blocked) throw new InvalidInput(blocked);
+					view.dialog = snoozeDialog(task, t);
+					return false;
+				}
+				if (section === "watching" && !watched) {
 					view.dialog = watchDialog(task, t);
 					return false;
 				}
 				// Inside Progressing, `before` may belong to another group.
 				life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
-				if (section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
 				return true;
 			}
 			case "undo":
@@ -199,16 +206,16 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				life.unsettle(data, rowId(), t);
 				return true;
 			case "snooze":
-				view.dialog = { kind: "snooze", id: model.findTask(data, rowId()).id, until: defaultSnooze(t) };
-				return false;
 			case "watch":
 			case "edit-watch": {
-				// A dialog; from the quick view it opens in the main window, on the task.
+				// Z and W always ask when: a dialog, from the quick view in the main window, on the task.
 				const task = model.findTask(data, rowId());
-				view.dialog = watchDialog(task, t);
+				const blocked = name === "snooze" ? life.cantSnooze(task) : undefined;
+				if (blocked) throw new InvalidInput(blocked);
+				view.dialog = name === "snooze" ? snoozeDialog(task, t) : watchDialog(task, t);
 				if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
 					view.dialog = undefined;
-					throw new InvalidInput("Open OnTrack to watch it.");
+					throw new InvalidInput("Open OnTrack to choose when.");
 				}
 				return false;
 			}

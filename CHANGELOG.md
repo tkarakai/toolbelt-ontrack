@@ -3,6 +3,7 @@
 ## Unreleased
 - **Progressing** gathers everything still in motion in three groups: Working on it, Snoozed and Watching. No task sits directly under it.
 - **One state machine for every task.** P starts work from the Inbox and brings a task back to the Inbox from anywhere else (Done for now, wake, stop watching, reopen). Z, W and S snooze, watch and settle, or change the snooze or watch when the task is already there. A archives. D and the old Wake (W) and Un-settle (S) keys are gone; the README has the full table.
+- **P into the Inbox always marks the task unread**, saying why (Back from Working on it, Back from Snoozed, Back from Watching, Reopened from Settled). **Z always asks how long and W always asks when to check in**, from the key, a drag, the drawer's Status or the quick view (which opens the dialog in the main window).
 - Working is now called **Working on it**.
 - After you create a task, the list selects it.
 - **Pinned is gone.** Labels do the job: give tasks a yes/no label and filter by it. Tasks you had pinned get a yes/no **Pinned** label on upgrade, so you can still find them; delete the label if you don't need it.

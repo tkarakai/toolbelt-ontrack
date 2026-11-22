@@ -608,6 +608,12 @@ export const fieldValue = (value: unknown) => (value === NONE ? "" : value);
 const save: Action = { id: "save", label: "Save", primary: true };
 const error = (text?: string): Node[] => (text ? [{ type: "text", text, tone: "danger" }] : []);
 
+/** The Snooze dialog for a task: its current wake time while snoozed, else tomorrow at 9:00. */
+export function snoozeDialog(task: Task, now: number): Extract<Dialog, { kind: "snooze" }> {
+	const until = task.state === "snoozed" && task.snoozedUntil && task.snoozedUntil > now ? toLocalInput(task.snoozedUntil) : defaultSnooze(now);
+	return { kind: "snooze", id: task.id, until };
+}
+
 /** The default custom snooze: tomorrow at 9:00, local time. */
 export function defaultSnooze(now: number) {
 	const d = new Date(now);
@@ -894,7 +900,7 @@ export function quickView(data: Data, now: number): Node {
 	const waiting = inSection(data, "inbox");
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
-		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
+		snooze: { id: "snooze", label: "Snooze…", icon: "alarm-clock", key: "z" },
 		watch: { id: "watch", label: "Watch…", icon: "eye", key: "w" },
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};

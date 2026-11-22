@@ -51,7 +51,10 @@ cadence. Saving it offers Undo.
 Row keys follow the state machine in `actionsFor`: P is `start` in the Inbox and the way back
 to the Inbox elsewhere (`done`, `wake`, `stop-watching`, `unsettle`); Z `snooze` (also in
 Snoozed, to change the time; not in Watching or Settled); W `watch`, or `edit-watch` in Watching;
-S `settle` (not in Settled). A archive/unarchive, E edit, ⇧U add update, R relate, U read/unread.
+S `settle` (not in Settled). Every move into the Inbox marks the task unread with a reason
+(`doneForNow`, `wake`, `stopWatching`, `unsettle`); `startWorking` reads it. `snooze`, `watch`
+and `edit-watch` always open their dialog (from the quick view, in the main window), and so do a
+drop into Snoozed or Watching and the drawer's Status; `cantSnooze` refuses Settled and Watching. A archive/unarchive, E edit, ⇧U add update, R relate, U read/unread.
 Actions sharing a key never appear on the same row.
 
 `watch` on a task a check-in brought back (it still has `watch` but isn't in Watching) opens the

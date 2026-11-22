@@ -102,9 +102,9 @@ test("start working, done for now, unread until opened", async () => {
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
 	const row = rows().find((r) => r.id === "2");
 	expect(row).toMatchObject({ unread: true });
-	expect(row.cells.name.sub).toBe("Back from Working");
+	expect(row.cells.name.sub).toBe("Back from Working on it");
 	expect(row.pane.find((n: any) => n.tone === "muted").text).toContain("25m worked in 1 session");
-	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working", tone: "info" });
+	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working on it", tone: "info" });
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 	await event("select", { table: "tasks", rowId: "2" });
 	expect(rows().find((r) => r.id === "2").unread).toBeUndefined();
@@ -119,8 +119,11 @@ test("drag between sections performs the matching transition", async () => {
 	// Progressing has no tasks of its own: Working, Snoozed and Watching are groups inside it.
 	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working on it", icon: "play" }]);
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
+	// Dropping into Snoozed asks how long, as Z does; Settled can't be snoozed without P first.
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
-	expect(toasts().at(-1)).toMatchObject({ text: "Choose Snooze to pick a wake time.", tone: "error" });
+	expect(toasts().at(-1)).toMatchObject({ text: "Reopen it first (P), then snooze it.", tone: "error" });
+	await event("reorder", { table: "tasks", rowId: "3", section: "snoozed", before: null });
+	expect(tree("screen:tasks").dialog).toMatchObject({ id: "snooze" });
 });
 
 test("snooze from the menu, wake on time unread, and the custom snooze dialog", async () => {
@@ -374,7 +377,7 @@ test("the drawer edits a task in place: name, status, due, labels, description, 
 	expect(tree("screen:tasks").dialog.id).toBe("updates");
 });
 
-test("the quick view adds tasks and updates, and snoozes, without the window", async () => {
+test("the quick view adds tasks and updates without the window, and Z asks how long in it", async () => {
 	const { event, saved } = await start(fixture());
 	expect(tree("quick").children[0]).toMatchObject({ type: "composer", id: "quick-task", single: true, key: "n" });
 	await event("quick-task", { composer: "quick-task", text: "Buy stamps" }, "quick");
@@ -383,12 +386,19 @@ test("the quick view adds tasks and updates, and snoozes, without the window", a
 	expect(toasts().at(-1)).toMatchObject({ text: `Added #${added.id} to the Inbox` });
 
 	const item = quickList().items.find((i: any) => i.id === "1");
-	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "add-update", "snooze:tomorrow", "settle"]);
+	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "add-update", "snooze", "settle"]);
 	expect(item.actions[1].input).toBeDefined();
 	await event("add-update", { rowId: "1", text: "Asked for a quote" }, "quick");
 	expect(quickList().items.find((i: any) => i.id === "1").subtitle).toContain("Asked for a quote");
-	await event("snooze:tomorrow", { rowId: "1" }, "quick");
+	// Z asks how long, in the main window, on the task.
+	await event("snooze", { rowId: "1" }, "quick");
+	expect(host!.messages.filter((m: any) => m.type === "navigate").at(-1)).toMatchObject({ screen: "tasks", select: "1" });
+	expect(tree("screen:tasks").dialog.children[0].fields[0]).toMatchObject({ id: "until", value: "2026-11-15T09:00" });
+	await event("save", { dialog: "snooze" });
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("snoozed");
+	// Z on a snoozed task changes the time, starting from the current one.
+	await event("snooze", { rowId: "1" });
+	expect(tree("screen:tasks").dialog.children[0].fields[0].value).toBe("2026-11-15T09:00");
 });
 
 test("watch a task, see it come back for its check-in with why, and watch it again from the window or quick view", async () => {
@@ -441,7 +451,7 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(row.cells.name.marks).toEqual([{ icon: "eye", tooltip: "Watching: waiting on Cobra team" }]);
 	expect(lastBadge()).toMatchObject({ value: 1 });
 	const item = quickList().items.find((i: any) => i.id === "1");
-	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "watch", "add-update", "snooze:tomorrow", "settle"]);
+	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "watch", "add-update", "snooze", "settle"]);
 	// Back in the Inbox: no stop-watching; W watches it again.
 	expect(row.actions.slice(0, 4)).toEqual(["start", "snooze", "watch", "settle"]);
 
@@ -463,12 +473,15 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox" });
 	expect(saved.at(-1)!.tasks[0]!.watch).toBeUndefined();
 	expect(rows().find((r) => r.id === "1").group).toBe("inbox");
-	// The drawer's status opens the Watch dialog; a drag watches weekly.
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ unread: true, unreadReason: "Back from Watching" });
+	// The drawer's status and a drop into Watching open the Watch dialog too.
 	await event("field", { form: "task", field: "state", value: "watching", rowId: "1" });
 	expect(tree("screen:tasks").dialog.id).toBe("watch");
 	await event("save", { dialog: "watch" });
 	// The host reports a drop into the Watching group as Progressing; the end of it is Watching.
 	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
+	expect(tree("screen:tasks").dialog).toMatchObject({ id: "watch", title: "Watch #2 Reply to Anna" });
+	await event("save", { dialog: "watch" });
 	expect(saved.at(-1)!.tasks[1]).toMatchObject({ state: "watching", watch: { every: { n: 1, unit: "week" }, next: nov(27) } });
 	expect(toasts().at(-1).text).toMatch(/^Watching #2 · next check-in /);
 });

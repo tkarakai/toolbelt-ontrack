@@ -107,14 +107,21 @@ export function doneForNow(data: Data, id: number, now: number, before: number |
 	task.state = "inbox";
 	if (before === null) toTop(data, "inbox", id);
 	else place(data, "inbox", id, before);
-	markUnread(task, "Back from Working");
+markUnread(task, "Back from Working on it");
 	touch(task, now);
+}
+
+/** Why a task can't be snoozed from where it is (Settled and Watching bring it back with P first). */
+export function cantSnooze(task: Task): string | undefined {
+	if (task.state === "settled") return "Reopen it first (P), then snooze it.";
+	if (task.state === "watching") return "Stop watching it first (P), then snooze it.";
 }
 
 export function snooze(data: Data, id: number, until: number, now: number) {
 	const task = findTask(data, id);
 	if (until <= now) fail("Choose a time in the future.");
-	if (task.state === "settled") fail("Un-settle it first.");
+	const blocked = cantSnooze(task);
+	if (blocked) fail(blocked);
 	endSession(task, now);
 	task.state = "snoozed";
 	task.snoozedUntil = until;
@@ -122,8 +129,8 @@ export function snooze(data: Data, id: number, until: number, now: number) {
 }
 
 /**
- * Snoozed → top of the Inbox. On its own (the time came, or the due date
- * did) it's marked unread; woken by hand, it isn't — you already know.
+ * Snoozed → top of the Inbox, unread: `reason` says why (the time came, the due date did), or
+ * "Back from Snoozed" when woken by hand. Everything that comes back to the Inbox is unread.
  */
 export function wake(data: Data, id: number, now: number, reason?: string, before: number | null = null) {
 	const task = findTask(data, id);
@@ -132,7 +139,7 @@ export function wake(data: Data, id: number, now: number, reason?: string, befor
 	delete task.snoozedUntil;
 	if (before === null) toTop(data, "inbox", id);
 	else place(data, "inbox", id, before);
-	if (reason) markUnread(task, reason);
+	markUnread(task, reason ?? "Back from Snoozed");
 	touch(task, now);
 }
 
@@ -151,7 +158,7 @@ export function settle(data: Data, id: number, now: number) {
 	afterSettle(data, task);
 }
 
-/** Settled → top of the Inbox. */
+/** Settled → top of the Inbox, unread. */
 export function unsettle(data: Data, id: number, now: number, before: number | null = null) {
 	const task = findTask(data, id);
 	if (task.state !== "settled") fail("Not settled.");
@@ -159,6 +166,7 @@ export function unsettle(data: Data, id: number, now: number, before: number | n
 	delete task.settledAt;
 	if (before === null) toTop(data, "inbox", id);
 	else place(data, "inbox", id, before);
+	markUnread(task, "Reopened from Settled");
 	touch(task, now);
 }
 
@@ -216,21 +224,16 @@ export function dropSection(data: Data, section: SectionId, before: number | nul
 /**
  * A drag: into `section` before task `before`. Within a section it reorders; between sections
  * it's the matching transition (Start working, Done for now, Wake, Un-settle,
- * Settle, Watch, Stop watching). Snoozing needs a time, so nothing drops into Snoozed. Dropped
- * into Watching, a task back from a check-in is watched again on its schedule; any other is
- * watched weekly, the default schedule.
+ * Settle, Stop watching). Snoozed and Watching need a time, so a drop into them is refused here;
+ * the plugin opens the Snooze or Watch dialog instead.
  */
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
 	const task = findTask(data, id);
 	const from = sectionOf(task);
+	// Snoozed and Watching need a time: Z and W ask (a drop into them opens the same dialog).
 	if (section === "snoozed") return from === "snoozed" ? undefined : fail("Choose Snooze to pick a wake time.");
 	if (section === "settled") return from === "settled" ? undefined : settle(data, id, now);
-	if (section === "watching") {
-		if (from === "watching") return;
-		// Back from a check-in: watched again on its schedule. Otherwise weekly, the default.
-		const w = task.watch;
-		return w ? watch(data, id, { on: w.on, every: w.every, next: nextOnSchedule(task, now) }, now) : watch(data, id, { every: WEEKLY, next: defaultCheck(now, WEEKLY) }, now);
-	}
+	if (section === "watching") return from === "watching" ? undefined : fail("Choose Watch to pick when to check in.");
 	if (from === section) {
 		place(data, section as keyof Order, id, before);
 		return touch(task, now);
@@ -367,7 +370,7 @@ export function nextOnSchedule(task: Task, now: number): number | undefined {
 	return w && w.next === undefined ? undefined : defaultCheck(now);
 }
 
-/** No longer watched. A task in Watching goes to the top of the Inbox (or `before`), read. */
+/** No longer watched. A task in Watching goes to the top of the Inbox (or `before`), unread. */
 export function stopWatching(data: Data, id: number, now: number, before: number | null = null) {
 	const task = findTask(data, id);
 	if (!task.watch) fail("This task isn't watched.");
@@ -376,6 +379,7 @@ export function stopWatching(data: Data, id: number, now: number, before: number
 		task.state = "inbox";
 		if (before === null) toTop(data, "inbox", id);
 		else place(data, "inbox", id, before);
+		markUnread(task, "Back from Watching");
 	}
 	touch(task, now);
 }

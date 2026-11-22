@@ -28,8 +28,8 @@ keeps room for a real agent later.
   offer **Undo** for five seconds.
 - **Drag** tasks within the Inbox and Working on it to order them, or between sections: into
   Working on it starts it, Working on it → Inbox is Done for now, onto Settled
-  settles, out of Snoozed wakes, out of Settled un-settles. Into the Watching group watches weekly
-  (a task back from a check-in opens the check-in dialog); out of it stops watching. Nothing drops into Snoozed, which needs a wake time. A drop just above a group's
+  settles, out of Snoozed wakes, out of Settled reopens. Into Snoozed or Watching opens the
+  same dialog as Z or W, to pick the time; out of Watching stops watching. A drop just above a group's
   header belongs to what's above it; a drop at the very end of Progressing joins its last group.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
@@ -42,8 +42,8 @@ keeps room for a real agent later.
 - The menu-bar **quick view** is a focus list: what you're working on (with elapsed time and its
   latest update), then the Inbox in your order. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop working (P), add an update (U, then ↵),
-  snooze until tomorrow 9:00 (Z), settle (S) and, on a task back from a check-in, watch it again
-  (W, which opens the check-in dialog in the main window). Enter opens the task in the main window. The
+  settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
+  their dialog in the main window, on the task. Enter opens the task in the main window. The
   plugin badge counts open tasks that are unread or overdue.
 
 ### Editing in the drawer
@@ -93,6 +93,13 @@ Watching or Settled, or change it when it's already there.
 | **Watching** | → Inbox (stop watching) | — | change the watch | → Settled |
 | **Settled** | → Inbox (reopen) | — | → Watching | — |
 | *Archived* | **A** unarchives; E edits, ⇧U adds an update, Delete | | | |
+
+Three rules keep it simple. **P** into the Inbox always marks the task unread, saying why (Back
+from Working on it, Back from Snoozed, Back from Watching, Reopened from Settled); P into Working
+on it reads it, since you just chose it. **Z** always asks how long (starting from the current
+wake time when it's already snoozed), and **W** always asks when to check in, whether from the
+key, a drag, the drawer's Status or the quick view. Snoozing a task in Watching or Settled needs
+P first.
 
 On their own: a snooze ending, a check-in coming due or a due date arriving brings a task back
 to the top of the Inbox, unread, saying why. A task a check-in brought back stays watched (an eye

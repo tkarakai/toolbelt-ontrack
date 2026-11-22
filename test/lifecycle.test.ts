@@ -26,7 +26,7 @@ describe("sections", () => {
 		expect(life.workingSince(m.findTask(d, a))).toBe(NOW);
 		life.doneForNow(d, a, NOW + 2 * H);
 		const t = m.findTask(d, a);
-		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working"]);
+		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working on it"]);
 		expect(names(d, "inbox")[0]).toBe("a");
 		life.startWorking(d, a, NOW + 3 * H);
 		expect(t.unread).toBe(false);
@@ -48,11 +48,19 @@ describe("sections", () => {
 		expect(() => life.snooze(d, a, NOW - 1, NOW)).toThrow(m.InvalidInput);
 	});
 
-	test("waking by hand doesn't mark unread", () => {
+	test("everything P brings back to the Inbox is unread, saying why", () => {
 		const { d, ids } = setup();
-		life.snooze(d, ids[0]!, NOW + H, NOW);
-		life.wake(d, ids[0]!, NOW);
-		expect(m.findTask(d, ids[0]!).unread).toBe(false);
+		const [a, b, c] = ids as [number, number, number];
+		life.snooze(d, a, NOW + H, NOW);
+		life.wake(d, a, NOW);
+		life.settle(d, b, NOW);
+		life.unsettle(d, b, NOW);
+		life.watch(d, c, {}, NOW);
+		life.stopWatching(d, c, NOW);
+		expect([a, b, c].map((id) => m.findTask(d, id).unreadReason)).toEqual(["Back from Snoozed", "Reopened from Settled", "Back from Watching"]);
+		// Starting work reads it: you just chose it.
+		life.startWorking(d, a, NOW);
+		expect(m.findTask(d, a).unread).toBe(false);
 	});
 
 	test("a due date arriving wakes a snoozed task early and marks open tasks unread once", () => {
@@ -248,6 +256,10 @@ describe("watching", () => {
 		expect(() => life.stopWatching(d, a, NOW)).toThrow(m.InvalidInput);
 		life.watch(d, a, {}, NOW);
 		expect(() => life.move(d, a, 1, NOW)).toThrow(m.InvalidInput);
+		// The state machine: no Z from Watching or Settled; P brings it back first.
+		expect(() => life.snooze(d, a, NOW + H, NOW)).toThrow("Stop watching it first (P), then snooze it.");
+		life.settle(d, a, NOW);
+		expect(() => life.snooze(d, a, NOW + H, NOW)).toThrow("Reopen it first (P), then snooze it.");
 	});
 
 	test("starting work, settling or stopping ends the watch; watching again keeps its history", () => {
@@ -263,7 +275,7 @@ describe("watching", () => {
 		expect(m.findTask(d, b).watch).toBeUndefined();
 		life.watch(d, c, { on: "them", every: life.WEEKLY, next: at(28) }, at(21, 11));
 		life.stopWatching(d, c, at(21, 12));
-		expect(m.findTask(d, c)).toMatchObject({ state: "inbox", unread: false });
+		expect(m.findTask(d, c)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Watching" });
 		expect(m.findTask(d, c).watch).toBeUndefined();
 		expect(names(d, "inbox")[0]).toBe("c");
 		// From Settled: keep an eye on it after all.
@@ -312,20 +324,16 @@ describe("watching", () => {
 		expect(() => life.drop(d, w1, "snoozed", null, NOW)).toThrow(m.InvalidInput);
 	});
 
-	test("drag into Watching watches weekly (or again on its schedule); out of it stops watching", () => {
+	test("drops into Watching or Snoozed need a time (the plugin asks); out of Watching stops watching", () => {
 		const { d, ids } = setup();
 		const [a, b] = ids as [number, number];
-		life.drop(d, a, "watching", null, NOW);
-		expect(m.findTask(d, a).watch).toMatchObject({ every: life.WEEKLY, next: at(21) });
-		life.tick(d, at(21));
-		life.drop(d, a, "watching", null, at(21, 10));
-		expect(m.findTask(d, a).watch).toMatchObject({ checks: 1, next: at(28) });
-		life.drop(d, a, "inbox", b, at(21, 11));
+		expect(() => life.drop(d, a, "watching", null, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.drop(d, a, "snoozed", null, NOW)).toThrow(m.InvalidInput);
+		life.watch(d, a, { every: life.WEEKLY, next: at(21) }, NOW);
+		expect(() => life.drop(d, a, "watching", null, NOW)).not.toThrow();
+		life.drop(d, a, "inbox", b, NOW);
+		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Watching" });
 		expect(m.findTask(d, a).watch).toBeUndefined();
 		expect(names(d, "inbox")).toEqual(["c", "a", "b"]);
-		life.drop(d, b, "watching", null, NOW);
-		life.drop(d, b, "inbox", null, NOW);
-		expect(m.findTask(d, b).state).toBe("inbox");
-		expect(m.findTask(d, b).watch).toBeUndefined();
 	});
 });
