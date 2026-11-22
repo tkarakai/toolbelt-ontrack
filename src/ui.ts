@@ -1,7 +1,7 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, timeSpent, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -179,11 +179,11 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
  */
 export function taskActions(now: number): Action[] {
 	return [
-		{ id: "start", label: "Start working on it", icon: "play", key: "p", inline: true, group: "flow" },
+		{ id: "work", label: "Start working on it", icon: "play", key: "p", inline: true, group: "flow" },
 		{ id: "done", label: "Done for now", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "wake", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
-		{ id: "stop-watching", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
-		{ id: "unsettle", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "unwatch", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "reopen", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
 		{
 			id: "snooze",
@@ -194,7 +194,6 @@ export function taskActions(now: number): Action[] {
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
 		{ id: "watch", label: "Watch…", icon: "eye", key: "w", group: "flow" },
-		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "w", group: "flow" },
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
@@ -211,17 +210,18 @@ export function taskActions(now: number): Action[] {
 }
 
 /** The action ids a task offers, from its state. */
-/** The action ids a task offers, from its state. */
+/** The action that moves a task into each state (into the Inbox, by where it comes from). */
+const MOVE: Record<Exclude<Task["state"], "inbox">, string> = { working: "work", snoozed: "snooze", watching: "watch", settled: "settle" };
+const BACK: Record<Exclude<Task["state"], "inbox">, string> = { working: "done", snoozed: "wake", watching: "unwatch", settled: "reopen" };
+
+/** The action id that makes `task` move to `to` (which `TRANSITIONS` must allow). */
+export const actionFor = (task: Task, to: Task["state"]) => (to === "inbox" ? BACK[task.state as Exclude<Task["state"], "inbox">] : MOVE[to]);
+
+/** The action ids a task offers: its moves from `TRANSITIONS` (P, Z, W, S), then the rest. */
 export function actionsFor(data: Data, task: Task): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
-	// The state machine: P starts work from the Inbox and brings a task back to it from anywhere
-	// else; Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there.
-	const back: Record<Task["state"], string> = { inbox: "start", working: "done", snoozed: "wake", watching: "stop-watching", settled: "unsettle" };
-	const ids: string[] = [back[task.state]];
-	if (task.state !== "watching" && task.state !== "settled") ids.push("snooze");
-	ids.push(task.state === "watching" ? "edit-watch" : "watch");
-	if (task.state !== "settled") ids.push("settle");
+	const ids = TRANSITIONS[task.state].map((to) => actionFor(task, to));
 	ids.push("edit", "add-update", "relate");
 	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
@@ -321,7 +321,9 @@ function taskRow(data: Data, task: Task, now: number): Row {
 function statusOptions(task: Task, now: number) {
 	const since = workingSince(task);
 	const at = (ms: number) => stamp(ms, now);
-	return [
+	// Only the states `TRANSITIONS` allows from here, in list order, and the current one.
+	const reachable = (value: string) => value === task.state || TRANSITIONS[task.state].includes(value as Task["state"]);
+	return ([
 		{ value: "inbox", label: "Inbox" },
 		{ value: "working", label: task.state === "working" && since ? `Working on it · since ${at(since)}` : "Working on it" },
 		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
@@ -330,7 +332,7 @@ function statusOptions(task: Task, now: number) {
 			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
 		},
 		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
-	];
+	] satisfies { value: (typeof STATES)[number]; label: string }[]).filter((o) => reachable(o.value));
 }
 
 /** A watched task's schedule, in full: who, since when, how often, next and last check. */
@@ -919,7 +921,7 @@ export function quickView(data: Data, now: number): Node {
 			unread: t.unread || undefined,
 			actions: since
 				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.snooze, later.settle]
-				: [{ id: "start", label: "Start working on it", icon: "play", key: "p" }, ...(t.watch ? [later.watch] : []), later.update, later.snooze, later.settle],
+				: [{ id: "work", label: "Start working on it", icon: "play", key: "p" }, ...(t.watch ? [later.watch] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {

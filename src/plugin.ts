@@ -10,6 +10,18 @@ import { attention, fieldValue, fromTagValues, initialView, quickView, REPEATS, 
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
+/** Each move's action id and the state it moves the task to (see `actionFor` in ui.ts). */
+const MOVES: Record<string, model.TaskState> = {
+	work: "working",
+	done: "inbox",
+	wake: "inbox",
+	unwatch: "inbox",
+	reopen: "inbox",
+	snooze: "snoozed",
+	watch: "watching",
+	settle: "settled",
+};
+
 /** How long an Undo stays offered, as in T3 Code. */
 export const UNDO_MS = 5_000;
 /** The longest wait between checks, so a sleeping Mac catches up soon after waking. */
@@ -53,35 +65,38 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	}
 
 	/**
-	 * A field of the drawer's property sheet. Status moves the task through its lifecycle
-	 * (Snooze asks until when); the rest saves through the same checks as the Edit dialog.
+	 * Moves a task to `to`, the way every entry point does (keys, drags, the drawer's Status, the
+	 * quick view): Snoozed and Watching open their dialog to pick the time; any other state is a
+	 * `transition` now. Refused moves throw before anything opens. Returns whether data changed.
+	 */
+	function moveTo(task: model.Task, to: model.TaskState, c: Context, surface: string, before: Data, at: number | null = null): boolean {
+		const t = now();
+		const refused = to === task.state && (to === "snoozed" || to === "watching") ? undefined : life.refusal(task, to);
+		if (refused) throw new InvalidInput(refused);
+		if (to === "snoozed" || to === "watching") {
+			view.dialog = to === "snoozed" ? snoozeDialog(task, t) : watchDialog(task, t);
+			// From the quick view, the dialog opens in the main window, on the task.
+			if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
+				view.dialog = undefined;
+				throw new InvalidInput("Open OnTrack to choose when.");
+			}
+			return false;
+		}
+		life.transition(data, task.id, to, { before: at }, t);
+		if (to === "settled") offerUndo(c, `Settled #${task.id}`, before);
+		return true;
+	}
+
+	/**
+	 * A field of the drawer's property sheet. Status moves the task (`moveTo`); the rest saves
+	 * through the same checks as the Edit dialog.
 	 */
 	function editInPlace(task: model.Task, field: string, value: unknown, c: Context, before: Data): boolean {
 		const t = now();
 		if (field === "state") {
-			const to = String(value);
-			if (to === task.state) return false;
-			if (to === "snoozed") {
-				const blocked = life.cantSnooze(task);
-				if (blocked) throw new InvalidInput(blocked);
-				view.dialog = snoozeDialog(task, t);
-				return false;
-			}
-			if (to === "watching") {
-				view.dialog = watchDialog(task, t);
-				return false;
-			}
-			// Moved out of Watching by hand: it's no longer watched (Working and Settled end it too).
-			if (task.state === "watching" && to === "inbox") {
-				life.stopWatching(data, task.id, t);
-				return true;
-			}
-			if (task.state === "settled") life.unsettle(data, task.id, t);
-			else if (task.state === "snoozed") life.wake(data, task.id, t);
-			if (to === "working" && task.state !== "working") life.startWorking(data, task.id, t);
-			if (to === "inbox" && task.state === "working") life.doneForNow(data, task.id, t);
-			if (to === "settled") (life.settle(data, task.id, t), offerUndo(c, `Settled #${task.id}`, before));
-			return true;
+			const to = String(value) as model.TaskState;
+			if (to === task.state || !life.STATES.includes(to)) return false;
+			return moveTo(task, to, c, "screen:tasks", before);
 		}
 		const input = { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } };
 		if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? value : []);
@@ -106,7 +121,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		if (name.startsWith("snooze:")) {
 			const choice = life.snoozeChoices(t).find((x) => `snooze:${x.id}` === name);
 			if (!choice) throw new InvalidInput("That snooze time has passed.");
-			life.snooze(data, rowId(), choice.until, t);
+			life.transition(data, rowId(), "snoozed", { until: choice.until }, t);
 			offerUndo(c, `Snoozed ${name2(rowId())} until ${new Date(choice.until).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`, before);
 			return true;
 		}
@@ -130,23 +145,15 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			case "reorder": {
 				const id = rowId();
 				const task = model.findTask(data, id);
-				const watched = task.state === "watching";
 				const at = p?.before ? Number(p.before) : null;
 				const section = life.dropSection(data, p?.section as life.SectionId, at, id);
-				// Into Snoozed or Watching: the same dialog as Z or W, to pick the time.
-				if (section === "snoozed" && task.state !== "snoozed") {
-					const blocked = life.cantSnooze(task);
-					if (blocked) throw new InvalidInput(blocked);
-					view.dialog = snoozeDialog(task, t);
-					return false;
-				}
-				if (section === "watching" && !watched) {
-					view.dialog = watchDialog(task, t);
-					return false;
+				// Within its own section a drop reorders; into another it's that move, like a key.
+				if (section === task.state) {
+					life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
+					return true;
 				}
 				// Inside Progressing, `before` may belong to another group.
-				life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
-				return true;
+				return moveTo(task, section, c, surface, before, section === "working" || section === "inbox" ? at : null);
 			}
 			case "undo":
 				if (!undo || undo.until < t) throw new InvalidInput("Too late to undo.");
@@ -188,40 +195,16 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				}
 				return false;
 			}
-			// ── lifecycle ──
-			case "start":
-				life.startWorking(data, rowId(), t);
-				return true;
+			// ── the state machine: each move's action, through `moveTo` ──
+			case "work":
 			case "done":
-				life.doneForNow(data, rowId(), t);
-				return true;
 			case "wake":
-				life.wake(data, rowId(), t);
-				return true;
-			case "settle":
-				life.settle(data, rowId(), t);
-				offerUndo(c, `Settled ${name2(rowId())}`, before);
-				return true;
-			case "unsettle":
-				life.unsettle(data, rowId(), t);
-				return true;
+			case "unwatch":
+			case "reopen":
 			case "snooze":
 			case "watch":
-			case "edit-watch": {
-				// Z and W always ask when: a dialog, from the quick view in the main window, on the task.
-				const task = model.findTask(data, rowId());
-				const blocked = name === "snooze" ? life.cantSnooze(task) : undefined;
-				if (blocked) throw new InvalidInput(blocked);
-				view.dialog = name === "snooze" ? snoozeDialog(task, t) : watchDialog(task, t);
-				if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
-					view.dialog = undefined;
-					throw new InvalidInput("Open OnTrack to choose when.");
-				}
-				return false;
-			}
-			case "stop-watching":
-				life.stopWatching(data, rowId(), t);
-				return true;
+			case "settle":
+				return moveTo(model.findTask(data, rowId()), MOVES[name], c, surface, before);
 			case "archive":
 				life.archive(data, rowId(), t);
 				offerUndo(c, `Archived ${name2(rowId())}`, before);
@@ -337,7 +320,11 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				} else if (dialog.kind === "snooze") {
 					const due = model.parseDue(dialog.until) ?? "";
 					if (!due) throw new InvalidInput("Choose when it should come back.");
-					life.snooze(data, dialog.id, model.dueAt(due.includes("T") ? due : `${due}T09:00`), t);
+					const until = model.dueAt(due.includes("T") ? due : `${due}T09:00`);
+					life.transition(data, dialog.id, "snoozed", { until }, t);
+					view.dialog = undefined;
+					offerUndo(c, `Snoozed ${name2(dialog.id)} until ${new Date(until).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`, before);
+					return true;
 				} else if (dialog.kind === "watch") {
 					const repeat = REPEATS.find((r) => r.id === dialog.repeat) ?? REPEATS[0]!;
 					let next: number | undefined;
@@ -346,7 +333,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 						if (!due) throw new InvalidInput("Choose when to check in, or No reminders.");
 						next = model.dueAt(due.includes("T") ? due : `${due}T09:00`);
 					}
-					life.watch(data, dialog.id, { on: dialog.on, every: repeat.every, next, note: dialog.note }, t);
+					life.transition(data, dialog.id, "watching", { watch: { on: dialog.on, every: repeat.every, next, note: dialog.note } }, t);
 					view.dialog = undefined;
 					offerUndo(c, `${dialog.checkIn ? "Still watching" : "Watching"} ${name2(dialog.id)} · ${nextCheckIn(dialog.id)}`, before);
 					return true;

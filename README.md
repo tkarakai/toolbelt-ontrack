@@ -26,11 +26,12 @@ keeps room for a real agent later.
   **↵** or **⇧U** adds an update, **R** relates, **U** marks read/unread, **⌥↑/⌥↓** move (Inbox
   and Working on it), and **Delete** is in the ⋯ menu. Settle, snooze, watch, archive and delete
   offer **Undo** for five seconds.
-- **Drag** tasks within the Inbox and Working on it to order them, or between sections: into
-  Working on it starts it, Working on it → Inbox is Done for now, onto Settled
-  settles, out of Snoozed wakes, out of Settled reopens. Into Snoozed or Watching opens the
-  same dialog as Z or W, to pick the time; out of Watching stops watching. A drop just above a group's
-  header belongs to what's above it; a drop at the very end of Progressing joins its last group.
+- **Drag** tasks within the Inbox and Working on it to order them, or between sections. A drop
+  is the same move as its key and follows the same [state machine](#states-and-keys): into the
+  Inbox is P, onto Settled settles, into Snoozed or Watching opens the same dialog as Z or W, and
+  a move the keys don't allow (Snoozed straight to Working on it, say) is refused with a hint.
+  A drop just above a group's header belongs to what's above it; a drop at the very end of
+  Progressing joins its last group.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
   often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
@@ -81,9 +82,12 @@ arrow and Page keys; ⌫ clears. Snooze's picker offers the Snooze menu's times 
 
 ### States and keys
 
-A task is in one state at a time. **P** is the way back: it starts work from the Inbox and
-brings a task back to the Inbox from anywhere else. **Z**, **W** and **S** put a task in Snoozed,
-Watching or Settled, or change it when it's already there.
+A task is in one state at a time, and the table below is every move it can make: the keys, a
+drag, the drawer's Status and the quick view all go through it, and anything else is refused
+with a hint (for example "Bring it back to the Inbox first (P), then start working on it.").
+**P** is the way back: it starts work from the Inbox and brings a task back to the Inbox from
+anywhere else. **Z**, **W** and **S** put a task in Snoozed, Watching or Settled, or change it
+when it's already there.
 
 | From \ key | **P** | **Z** | **W** | **S** |
 | --- | --- | --- | --- | --- |
@@ -103,8 +107,9 @@ P first.
 
 On their own: a snooze ending, a check-in coming due or a due date arriving brings a task back
 to the top of the Inbox, unread, saying why. A task a check-in brought back stays watched (an eye
-mark), so **W** from the Inbox is that check-in. The drawer's Status reads the same states, in
-the same order: Inbox, Working on it, Snoozed, Watching, Settled.
+mark), so **W** from the Inbox is that check-in. The drawer's Status lists the same states, in the
+same order (Inbox, Working on it, Snoozed, Watching, Settled), but only those the task can move
+to from where it is. An archived task doesn't move until it's unarchived (A).
 
 ### Watching
 

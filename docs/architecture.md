@@ -44,22 +44,32 @@ it mounts fresh, empty and focused (`autofocus`). Timeline actions arrive with
 for narrow windows and for Change times…, which opens it on one update (`closeAfter`).
 
 The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from `REPEATS`,
-`next` as a local datetime and `nextSet`) opens from `watch`, `edit-watch` and the drawer's
+`next` as a local datetime and `nextSet`) opens from `watch` and the drawer's
 Status. Until the person picks `next`, changing `repeat` moves it to the default for that
 cadence. Saving it offers Undo.
 
-Row keys follow the state machine in `actionsFor`: P is `start` in the Inbox and the way back
-to the Inbox elsewhere (`done`, `wake`, `stop-watching`, `unsettle`); Z `snooze` (also in
-Snoozed, to change the time; not in Watching or Settled); W `watch`, or `edit-watch` in Watching;
-S `settle` (not in Settled). Every move into the Inbox marks the task unread with a reason
-(`doneForNow`, `wake`, `stopWatching`, `unsettle`); `startWorking` reads it. `snooze`, `watch`
-and `edit-watch` always open their dialog (from the quick view, in the main window), and so do a
-drop into Snoozed or Watching and the drawer's Status; `cantSnooze` refuses Settled and Watching. A archive/unarchive, E edit, ⇧U add update, R relate, U read/unread.
-Actions sharing a key never appear on the same row.
+### The state machine
+
+`TRANSITIONS` in `src/lifecycle.ts` lists every state a task can move to from each state, and
+`transition(data, id, to, options, now)` is the only code that changes `state`. It refuses a
+move the table doesn't allow, or any move of an archived task, with `refusal`'s message (which
+names the key that helps), then applies the move's effects: work sessions, unread with a reason
+for every move into the Inbox, the watch bookkeeping (`watchInto`), the snooze time, settling and
+its relations, and order. The clock (`tick`) and drags (`drop`) call it too.
+
+Each move has one action id, and `actionsFor` derives a row's moves from the table
+(`actionFor`): P is `work` from the Inbox and, back to the Inbox, `done` (Working on it), `wake`
+(Snoozed), `unwatch` (Watching) and `reopen` (Settled); Z `snooze`, W `watch`, S `settle`. In
+the plugin, every entry point (row actions, drags, the drawer's Status, the quick view) goes
+through `moveTo`: Snoozed and Watching open their dialog (from the quick view, in the main
+window), whose save is the `transition`; other states are a `transition` at once. The drawer's
+Status offers only the states the table allows from where the task is. Other row keys: A
+archive/unarchive (a flag, not a state), E edit, ⇧U add update, R relate, U read/unread. Actions
+sharing a key never appear on the same row.
 
 `watch` on a task a check-in brought back (it still has `watch` but isn't in Watching) opens the
 Watch dialog in check-in mode (`checkIn`): the next date from `nextOnSchedule` and a `note`.
-Saving calls `watch`, which counts the check and logs it as an update. From the quick view,
+Saving moves it to Watching, which counts the check and logs it as an update. From the quick view,
 `watch` also calls `navigate("tasks", {select})` (optional `navigate` capability) so the dialog
 shows in the main window. A drop into Watching of such a task opens the same dialog.
 
@@ -73,7 +83,7 @@ on, and the lifecycle actions.
 | Location | Responsibility |
 | --- | --- |
 | `src/model.ts` | Types, seed data, validation, task/label/relation operations, schema upgrade. No I/O. |
-| `src/lifecycle.ts` | Sections, transitions, ordering, drag moves, unread rules and the clock (`tick`). No I/O. |
+| `src/lifecycle.ts` | The state machine (`TRANSITIONS`, `transition`), sections, ordering, drag moves, unread rules and the clock (`tick`). No I/O. |
 | `src/store.ts` | Loads and atomically saves `ontrack.json` (temporary file, then rename). |
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
@@ -107,8 +117,8 @@ started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first ch
 current schedule, the next check-in, the last check and how many there were. Repeats are
 `anchor` plus whole cadences on the local calendar (`addCadence`, month ends clamp), so the day
 and time never drift. No `next` means no reminders. A check-in moves the task to the Inbox but
-keeps `watch`, so watching it again is that check (counted, logged as an update); `startWorking`, `settle` and `stopWatching`
-delete it. When `watch` gets a date on the old schedule (same cadence), it keeps `anchor`; any
+keeps `watch`, so watching it again is that check (counted, logged as an update); moving to Working on it or Settled, or P from Watching,
+deletes it. When a move into Watching gets a date on the old schedule (same cadence), it keeps `anchor`; any
 other date becomes the new `anchor`.
 
 The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks

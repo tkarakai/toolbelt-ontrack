@@ -1,9 +1,10 @@
-// Where tasks are and how they move, modeled on T3 Code's thread list. A task lives in one home
-// section, from its state: Inbox, Working, Snoozed, Watching or Settled (the middle three shown
-// together under Progressing), plus Archive. You play the agent's part today: "Start working" is sending the agent a message, "Done for now" is the agent
-// finishing its turn. Time and
-// relations can mark tasks unread; nothing settles a task except you.
-import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type Task, type Watch } from "./model";
+// Where tasks are and how they move: one state machine, modeled on T3 Code's thread list. A task
+// is in one state, which is also its section: Inbox, Working on it, Snoozed, Watching or Settled
+// (the middle three shown together under Progressing). Archived is a flag on top. Every change of
+// state goes through `transition`, which allows only the moves in `TRANSITIONS`. You play the
+// agent's part today: starting work is sending the agent a message, Done for now is the agent
+// finishing its turn. Time and relations can mark tasks unread; nothing settles a task but you.
+import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type Task, type TaskState, type Watch } from "./model";
 
 export const ME = "me";
 
@@ -66,7 +67,7 @@ export const timeSpent = (task: Task, now: number) => task.sessions.reduce((sum,
 /** When the current work session started, while the task is being worked on. */
 export const workingSince = (task: Task) => (task.state === "working" ? task.sessions.at(-1)?.start : undefined);
 
-// ── transitions ─────────────────────────────────────────────────────────
+// ── unread ──────────────────────────────────────────────────────────────
 
 const touch = (task: Task, now: number) => {
 	task.updated = now;
@@ -83,93 +84,117 @@ export function markRead(task: Task) {
 	delete task.unreadReason;
 }
 
-/** Inbox (or anywhere not Working) → Working: the equivalent of sending the agent a message. */
-export function startWorking(data: Data, id: number, now: number, by = ME) {
-	const task = findTask(data, id);
-	if (task.state === "working") fail("Already working on this.");
-	if (task.state === "settled") delete task.settledAt;
-	delete task.snoozedUntil;
-	// The ball is in your court again: it's no longer watched.
-	delete task.watch;
-	task.state = "working";
-	task.archived = false;
-	task.sessions.push({ start: now, by });
-	markRead(task);
-	toTop(data, "working", id);
-	touch(task, now);
-}
-
-/** Working → top of the Inbox, unread: the equivalent of the agent finishing its turn. */
-export function doneForNow(data: Data, id: number, now: number, before: number | null = null) {
-	const task = findTask(data, id);
-	if (task.state !== "working") fail("Not being worked on.");
-	endSession(task, now);
-	task.state = "inbox";
-	if (before === null) toTop(data, "inbox", id);
-	else place(data, "inbox", id, before);
-markUnread(task, "Back from Working on it");
-	touch(task, now);
-}
-
-/** Why a task can't be snoozed from where it is (Settled and Watching bring it back with P first). */
-export function cantSnooze(task: Task): string | undefined {
-	if (task.state === "settled") return "Reopen it first (P), then snooze it.";
-	if (task.state === "watching") return "Stop watching it first (P), then snooze it.";
-}
-
-export function snooze(data: Data, id: number, until: number, now: number) {
-	const task = findTask(data, id);
-	if (until <= now) fail("Choose a time in the future.");
-	const blocked = cantSnooze(task);
-	if (blocked) fail(blocked);
-	endSession(task, now);
-	task.state = "snoozed";
-	task.snoozedUntil = until;
-	touch(task, now);
-}
+// ── the state machine ───────────────────────────────────────────────────
 
 /**
- * Snoozed → top of the Inbox, unread: `reason` says why (the time came, the due date did), or
- * "Back from Snoozed" when woken by hand. Everything that comes back to the Inbox is unread.
+ * Every move a task can make, from each state; nothing else is possible. It drives the keys a
+ * row offers, the drawer's Status, drags, the quick view and the clock. P starts work from the
+ * Inbox and brings a task back to the Inbox from anywhere else; Z, W and S put it in Snoozed,
+ * Watching or Settled. Snoozed → Snoozed and Watching → Watching pick a new time.
  */
-export function wake(data: Data, id: number, now: number, reason?: string, before: number | null = null) {
-	const task = findTask(data, id);
-	if (task.state !== "snoozed") fail("Not snoozed.");
-	task.state = "inbox";
-	delete task.snoozedUntil;
-	if (before === null) toTop(data, "inbox", id);
-	else place(data, "inbox", id, before);
-	markUnread(task, reason ?? "Back from Snoozed");
-	touch(task, now);
+export const TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
+	inbox: ["working", "snoozed", "watching", "settled"],
+	working: ["inbox", "snoozed", "watching", "settled"],
+	snoozed: ["inbox", "snoozed", "watching", "settled"],
+	watching: ["inbox", "watching", "settled"],
+	settled: ["inbox", "watching"],
+};
+
+/** The states in the order the list and the drawer's Status show them. */
+export const STATES: readonly TaskState[] = ["inbox", "working", "snoozed", "watching", "settled"];
+
+export const canTransition = (from: TaskState, to: TaskState) => TRANSITIONS[from].includes(to);
+
+/** Why a task can't move to `to`, naming the key that gets it there; undefined when it can. */
+export function refusal(task: Task, to: TaskState): string | undefined {
+	if (task.archived) return "Unarchive it first (A).";
+	if (canTransition(task.state, to)) return undefined;
+	if (task.state === to) return to === "inbox" ? "Already in the Inbox." : to === "working" ? "Already working on it." : "Already settled.";
+	if (to === "working") return "Bring it back to the Inbox first (P), then start working on it.";
+	if (to === "snoozed") return task.state === "settled" ? "Reopen it first (P), then snooze it." : "Stop watching it first (P), then snooze it.";
+	return "That move isn't possible from here.";
 }
 
-/** Done. Relations may mark other tasks unread. */
-export function settle(data: Data, id: number, now: number) {
+export type TransitionOptions = {
+	/** Into Snoozed: when it wakes (epoch ms, in the future). */
+	until?: number;
+	/** Into Watching: who it waits on, the schedule, and a note for a check-in. */
+	watch?: WatchInput;
+	/** Into the Inbox: why it's back, for its unread line (default: where it came from). */
+	reason?: string;
+	/** Into the Inbox or Working on it: the task it goes before (default: the top). */
+	before?: number | null;
+	/** Watching → Inbox because a check-in came due: keep the watch, so W is that check-in. */
+	keepWatch?: boolean;
+	/** Into Working on it: who works on it ("me" today; room for an agent). */
+	by?: string;
+};
+
+/** The unread reason of a move back to the Inbox, by where it came from. */
+const BACK: Record<TaskState, string> = {
+	inbox: "",
+	working: "Back from Working on it",
+	snoozed: "Back from Snoozed",
+	watching: "Back from Watching",
+	settled: "Reopened from Settled",
+};
+
+/**
+ * The one way a task changes state. Refuses moves not in `TRANSITIONS` and archived tasks, then:
+ * - into Working on it: a work session starts, it's read, and any watch ends;
+ * - into the Inbox: unread, saying why; a work session ends; leaving Watching ends the watch
+ *   (unless a check-in brought it back, `keepWatch`);
+ * - into Snoozed: until `until`; into Watching: the watch (`watchInto`);
+ * - into Settled: read, any snooze or watch ends, and tasks it blocked or its parent may become
+ *   unread.
+ */
+export function transition(data: Data, id: number, to: TaskState, opts: TransitionOptions, now: number) {
 	const task = findTask(data, id);
-	if (task.state === "settled") fail("Already settled.");
+	const refused = refusal(task, to);
+	if (refused) fail(refused);
+	if (to === "snoozed" && !(opts.until !== undefined && opts.until > now)) fail("Choose a time in the future.");
+	const watching = to === "watching" ? checkWatch(opts.watch ?? {}, now) : undefined;
+	const from = task.state;
 	endSession(task, now);
-	task.state = "settled";
-	task.settledAt = now;
-	delete task.snoozedUntil;
-	delete task.watch;
-	markRead(task);
-	for (const key of ["inbox", "working"] as const) data.order[key] = without(data.order[key], id);
+	if (from === "settled") delete task.settledAt;
+	if (from === "snoozed") delete task.snoozedUntil;
+	const placeAt = (key: keyof Order) => (opts.before === undefined || opts.before === null ? toTop(data, key, id) : place(data, key, id, opts.before));
+	switch (to) {
+		case "working":
+			delete task.watch;
+			task.state = "working";
+			task.sessions.push({ start: now, by: opts.by ?? ME });
+			markRead(task);
+			placeAt("working");
+			break;
+		case "inbox":
+			if (from === "watching" && !opts.keepWatch) delete task.watch;
+			task.state = "inbox";
+			placeAt("inbox");
+			markUnread(task, opts.reason ?? BACK[from]);
+			break;
+		case "snoozed":
+			task.state = "snoozed";
+			task.snoozedUntil = opts.until;
+			break;
+		case "watching":
+			watchInto(data, task, watching!, opts.watch?.note, now);
+			break;
+		case "settled":
+			task.state = "settled";
+			task.settledAt = now;
+			delete task.watch;
+			markRead(task);
+			for (const key of ["inbox", "working"] as const) data.order[key] = without(data.order[key], id);
+			afterSettle(data, task);
+			break;
+	}
 	touch(task, now);
-	afterSettle(data, task);
 }
 
-/** Settled → top of the Inbox, unread. */
-export function unsettle(data: Data, id: number, now: number, before: number | null = null) {
-	const task = findTask(data, id);
-	if (task.state !== "settled") fail("Not settled.");
-	task.state = "inbox";
-	delete task.settledAt;
-	if (before === null) toTop(data, "inbox", id);
-	else place(data, "inbox", id, before);
-	markUnread(task, "Reopened from Settled");
-	touch(task, now);
-}
+// ── flags and order ─────────────────────────────────────────────────────
 
+/** Archived is a flag, not a state: out of every section. A running work session stops. */
 export function archive(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	endSession(task, now);
@@ -205,10 +230,10 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 }
 
 /**
- * Where a drop in Progressing lands. Its tasks show in three groups, Working, Snoozed and
- * Watching, and the host reports every drop into them as `working`, so `before` tells them apart: before
- * a group's first task ends the group above it, before any other joins its group, and at the
- * very end (`null`) it joins the last group shown. Other sections are as reported.
+ * Where a drop in Progressing lands. Its tasks show in three groups, Working on it, Snoozed and
+ * Watching, and the host reports every drop into them as `working`, so `before` tells them
+ * apart: before a group's first task ends the group above it, before any other joins its group,
+ * and at the very end (`null`) it joins the last group shown. Other sections are as reported.
  */
 export function dropSection(data: Data, section: SectionId, before: number | null, moving: number): SectionId {
 	if (section !== "working") return section;
@@ -222,32 +247,21 @@ export function dropSection(data: Data, section: SectionId, before: number | nul
 }
 
 /**
- * A drag: into `section` before task `before`. Within a section it reorders; between sections
- * it's the matching transition (Start working, Done for now, Wake, Un-settle,
- * Settle, Stop watching). Snoozed and Watching need a time, so a drop into them is refused here;
- * the plugin opens the Snooze or Watch dialog instead.
+ * A drag into `section` before task `before`: within its own section it reorders (Inbox,
+ * Working on it); into another it's that `transition`. Snoozed and Watching need a time, so a
+ * drop into them is refused here; the plugin opens the Snooze or Watch dialog instead.
  */
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
 	const task = findTask(data, id);
-	const from = sectionOf(task);
-	// Snoozed and Watching need a time: Z and W ask (a drop into them opens the same dialog).
-	if (section === "snoozed") return from === "snoozed" ? undefined : fail("Choose Snooze to pick a wake time.");
-	if (section === "settled") return from === "settled" ? undefined : settle(data, id, now);
-	if (section === "watching") return from === "watching" ? undefined : fail("Choose Watch to pick when to check in.");
-	if (from === section) {
-		place(data, section as keyof Order, id, before);
+	if (section === task.state) {
+		if (section === "inbox" || section === "working") place(data, section, id, before);
 		return touch(task, now);
 	}
-	if (from === "settled") unsettle(data, id, now, before);
-	if (from === "snoozed") wake(data, id, now, undefined, before);
-	if (from === "watching") stopWatching(data, id, now, before);
-	if (section === "working") {
-		if (task.state !== "working") startWorking(data, id, now);
-		return place(data, "working", id, before);
-	}
-	// section === "inbox"
-	if (task.state === "working") doneForNow(data, id, now, before);
-	else place(data, "inbox", id, before);
+	const refused = refusal(task, section);
+	if (refused) fail(refused);
+	if (section === "snoozed") fail("Choose Snooze to pick a wake time.");
+	if (section === "watching") fail("Choose Watch to pick when to check in.");
+	transition(data, id, section, { before: section === "inbox" || section === "working" ? before : null }, now);
 }
 
 // ── watching ────────────────────────────────────────────────────────────
@@ -320,29 +334,32 @@ function checkCadence(every: Cadence | undefined) {
 	return { n: every.n, unit: every.unit };
 }
 
-/**
- * Watch a task: out of your hands for now. With `next` it comes back to the Inbox then (and,
- * with `every`, on that schedule); without, only when you look. From any state (Settled too:
- * "keep an eye on it after all"); in Watching it changes the watch. Watching a task a check-in
- * brought back is that check: it's counted and logged as an update, with `note` if any, and it
- * keeps when watching started.
- */
-export function watch(data: Data, id: number, input: WatchInput, now: number) {
-	const task = findTask(data, id);
+type CheckedWatch = { on?: string; every?: Cadence; next?: number };
+
+/** A watch's input, checked before anything changes. */
+function checkWatch(input: WatchInput, now: number): CheckedWatch {
 	const every = checkCadence(input.every);
 	if (input.next !== undefined && input.next <= now) fail("Choose a check-in time in the future.");
 	if (every && input.next === undefined) fail("Choose when to check in first.");
 	const on = input.on?.trim().slice(0, 200);
-	endSession(task, now);
-	if (task.state === "settled") delete task.settledAt;
-	delete task.snoozedUntil;
+	return { ...(on && { on }), ...(every && { every }), ...(input.next !== undefined && { next: input.next }) };
+}
+
+/**
+ * Into Watching (the `transition`). With `next` it comes back to the Inbox then (and, with
+ * `every`, on that schedule); without, only when you look. Watching → Watching changes the
+ * watch. Watching a task a check-in brought back is that check: it's counted and logged as an
+ * update, with `note` if any, and it keeps when watching started.
+ */
+function watchInto(data: Data, task: Task, input: CheckedWatch, note: string | undefined, now: number) {
 	const was = task.watch;
 	const checked = was !== undefined && task.state !== "watching";
 	const w: Watch = { since: was?.since ?? now, checks: (was?.checks ?? 0) + (checked ? 1 : 0) };
-	if (on) w.on = on;
-	if (every) w.every = every;
+	if (input.on) w.on = input.on;
+	if (input.every) w.every = input.every;
 	if (input.next !== undefined) {
 		// A date on the old schedule keeps its anchor, so the day and time never drift.
+		const every = input.every;
 		const same = every && was?.every && was.anchor !== undefined && was.every.n === every.n && was.every.unit === every.unit;
 		w.anchor = same && nextCheck(was!.anchor!, every!, input.next - 1) === input.next ? was!.anchor! : input.next;
 		w.next = input.next;
@@ -352,12 +369,11 @@ export function watch(data: Data, id: number, input: WatchInput, now: number) {
 	task.watch = w;
 	if (checked) {
 		const text = `Checked in: still waiting${w.on ? ` on ${w.on}` : ""}.`;
-		const note = input.note?.trim();
-		addUpdate(data, id, note ? `${text}\n\n${note}` : text, now);
+		const extra = note?.trim();
+		addUpdate(data, task.id, extra ? `${text}\n\n${extra}` : text, now);
 	}
 	task.state = "watching";
 	markRead(task);
-	touch(task, now);
 }
 
 /**
@@ -368,28 +384,6 @@ export function nextOnSchedule(task: Task, now: number): number | undefined {
 	const w = task.watch;
 	if (w?.every && w.anchor !== undefined) return nextCheck(w.anchor, w.every, now);
 	return w && w.next === undefined ? undefined : defaultCheck(now);
-}
-
-/** No longer watched. A task in Watching goes to the top of the Inbox (or `before`), unread. */
-export function stopWatching(data: Data, id: number, now: number, before: number | null = null) {
-	const task = findTask(data, id);
-	if (!task.watch) fail("This task isn't watched.");
-	delete task.watch;
-	if (task.state === "watching") {
-		task.state = "inbox";
-		if (before === null) toTop(data, "inbox", id);
-		else place(data, "inbox", id, before);
-		markUnread(task, "Back from Watching");
-	}
-	touch(task, now);
-}
-
-/** A check-in came due: back to the top of the Inbox, unread with why, still watched. */
-function surface(data: Data, task: Task, now: number, reason: string) {
-	task.state = "inbox";
-	toTop(data, "inbox", task.id);
-	markUnread(task, reason);
-	touch(task, now);
 }
 
 // ── things that happen on their own ─────────────────────────────────────
@@ -421,10 +415,11 @@ export function tick(data: Data, now: number): boolean {
 		if (task.archived || task.state === "settled") continue;
 		const due = task.due && task.dueAnnounced !== task.due && dueAt(task.due) <= now ? task.due : undefined;
 		if (task.state === "snoozed" && (task.snoozedUntil! <= now || due)) {
-			wake(data, task.id, now, due ? "Due now" : "Snooze ended");
+			transition(data, task.id, "inbox", { reason: due ? "Due now" : "Snooze ended" }, now);
 			changed = true;
 		} else if (task.state === "watching" && ((task.watch?.next !== undefined && task.watch.next <= now) || due)) {
-			surface(data, task, now, due ? `Due now · ${watchingFor(task.watch!, now)}` : checkInReason(task.watch!, now));
+			const reason = due ? `Due now · ${watchingFor(task.watch!, now)}` : checkInReason(task.watch!, now);
+			transition(data, task.id, "inbox", { reason, keepWatch: true }, now);
 			changed = true;
 		} else if (due) {
 			markUnread(task, "Due now");

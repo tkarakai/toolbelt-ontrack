@@ -93,7 +93,7 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 
 test("start working, done for now, unread until opened", async () => {
 	const { event } = await start(fixture());
-	await event("start", { rowId: "2" });
+	await event("work", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
 	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working on it · under a minute" });
@@ -386,7 +386,7 @@ test("the quick view adds tasks and updates without the window, and Z asks how l
 	expect(toasts().at(-1)).toMatchObject({ text: `Added #${added.id} to the Inbox` });
 
 	const item = quickList().items.find((i: any) => i.id === "1");
-	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "add-update", "snooze", "settle"]);
+	expect(item.actions.map((a: any) => a.id)).toEqual(["work", "add-update", "snooze", "settle"]);
 	expect(item.actions[1].input).toBeDefined();
 	await event("add-update", { rowId: "1", text: "Asked for a quote" }, "quick");
 	expect(quickList().items.find((i: any) => i.id === "1").subtitle).toContain("Asked for a quote");
@@ -431,10 +431,10 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(row.cells.name.sub).toBe("Waiting on Cobra team · less than a day · every 2 weeks");
 	expect(row.cells.when).toMatchObject({ at: nov(20), icon: "eye" });
 	// In Watching: P back to the Inbox, W change the watch, S settle. No snooze.
-	expect(row.actions.slice(0, 3)).toEqual(["stop-watching", "edit-watch", "settle"]);
+	expect(row.actions.slice(0, 3)).toEqual(["unwatch", "watch", "settle"]);
 	expect(row.actions).not.toContain("snooze");
 	// Changing the watch in Watching isn't a check: the same dialog, without a note.
-	await event("edit-watch", { rowId: "1" });
+	await event("watch", { rowId: "1" });
 	dialog = tree("screen:tasks").dialog;
 	expect(dialog.title).toBe("Watch #1 Write spec");
 	expect(dialog.children[0].fields.map((f: any) => f.id)).toEqual(["on", "repeat", "next"]);
@@ -451,9 +451,9 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(row.cells.name.marks).toEqual([{ icon: "eye", tooltip: "Watching: waiting on Cobra team" }]);
 	expect(lastBadge()).toMatchObject({ value: 1 });
 	const item = quickList().items.find((i: any) => i.id === "1");
-	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "watch", "add-update", "snooze", "settle"]);
+	expect(item.actions.map((a: any) => a.id)).toEqual(["work", "watch", "add-update", "snooze", "settle"]);
 	// Back in the Inbox: no stop-watching; W watches it again.
-	expect(row.actions.slice(0, 4)).toEqual(["start", "snooze", "watch", "settle"]);
+	expect(row.actions.slice(0, 4)).toEqual(["work", "snooze", "watch", "settle"]);
 
 	// W from the quick view opens the main window on the task: a check-in, proposing the next
 	// date on schedule (Dec 4, two weeks on), with a note.
@@ -469,7 +469,7 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(toasts().at(-1)).toMatchObject({ text: expect.stringMatching(/^Still watching #1 · next check-in /), action: { id: "undo" } });
 
 	// P in Watching: back to the Inbox, an ordinary task again.
-	await event("stop-watching", { rowId: "1" });
+	await event("unwatch", { rowId: "1" });
 	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox" });
 	expect(saved.at(-1)!.tasks[0]!.watch).toBeUndefined();
 	expect(rows().find((r) => r.id === "1").group).toBe("inbox");
@@ -486,3 +486,40 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(toasts().at(-1).text).toMatch(/^Watching #2 · next check-in /);
 });
 
+
+test("every entry point goes through the state machine: keys, drags, Status and their action lists", async () => {
+	const { saved, event } = await start(fixture());
+	const actions = (id: string) => rows().find((r) => r.id === id).actions as string[];
+	const states = (id: string) => paneNode(id, "task").fields.find((f: any) => f.id === "state").options.map((o: any) => o.value);
+	// Inbox: P work, Z, W, S; the Status picker offers the same states.
+	expect(actions("1").slice(0, 4)).toEqual(["work", "snooze", "watch", "settle"]);
+	expect(states("1")).toEqual(["inbox", "working", "snoozed", "watching", "settled"]);
+	// Snoozed: P wake, Z again, W, S; no Working on it.
+	await event("snooze:tomorrow", { rowId: "1" });
+	expect(actions("1").slice(0, 4)).toEqual(["wake", "snooze", "watch", "settle"]);
+	expect(states("1")).toEqual(["inbox", "snoozed", "watching", "settled"]);
+	// A key, a drag or the Status picker can't jump from Snoozed to Working on it.
+	for (const send of [
+		() => event("work", { rowId: "1" }),
+		() => event("reorder", { table: "tasks", rowId: "1", section: "working", before: "2" }),
+		() => event("field", { form: "task", field: "state", value: "working", rowId: "1" }),
+	]) {
+		await send();
+		expect(toasts().at(-1)).toMatchObject({ text: "Bring it back to the Inbox first (P), then start working on it.", tone: "error" });
+		expect(saved.at(-1)!.tasks[0]!.state).toBe("snoozed");
+	}
+	// P wakes it, unread; P again starts work.
+	await event("wake", { rowId: "1" });
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Snoozed" });
+	await event("work", { rowId: "1" });
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "working", unread: false });
+	// Settled: P reopen, W watch; nothing else.
+	await event("settle", { rowId: "1" });
+	expect(actions("1").slice(0, 2)).toEqual(["reopen", "watch"]);
+	expect(actions("1")).not.toContain("snooze");
+	expect(states("1")).toEqual(["inbox", "watching", "settled"]);
+	await event("snooze", { rowId: "1" });
+	expect(toasts().at(-1)).toMatchObject({ text: "Reopen it first (P), then snooze it.", tone: "error" });
+	await event("reopen", { rowId: "1" });
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox", unread: true, unreadReason: "Reopened from Settled" });
+});

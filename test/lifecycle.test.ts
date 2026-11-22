@@ -21,23 +21,23 @@ describe("sections", () => {
 	test("working: start, done for now returns to the top of the Inbox unread, and sessions add up", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
-		life.startWorking(d, a, NOW);
+		life.transition(d, a, "working", {}, NOW);
 		expect(names(d, "working")).toEqual(["a"]);
 		expect(life.workingSince(m.findTask(d, a))).toBe(NOW);
-		life.doneForNow(d, a, NOW + 2 * H);
+		life.transition(d, a, "inbox", {}, NOW + 2 * H);
 		const t = m.findTask(d, a);
 		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working on it"]);
 		expect(names(d, "inbox")[0]).toBe("a");
-		life.startWorking(d, a, NOW + 3 * H);
+		life.transition(d, a, "working", {}, NOW + 3 * H);
 		expect(t.unread).toBe(false);
 		expect(life.timeSpent(t, NOW + 4 * H)).toBe(3 * H);
-		expect(() => life.startWorking(d, a, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.transition(d, a, "working", {}, NOW)).toThrow(m.InvalidInput);
 	});
 
 	test("snooze hides a task until it wakes, then it's on top and unread", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
-		life.snooze(d, a, NOW + H, NOW);
+		life.transition(d, a, "snoozed", { until: NOW + H }, NOW);
 		expect(names(d, "snoozed")).toEqual(["a"]);
 		expect(life.nextWake(d, NOW)).toBe(NOW + H);
 		expect(life.tick(d, NOW + H - 1)).toBe(false);
@@ -45,21 +45,21 @@ describe("sections", () => {
 		const t = m.findTask(d, a);
 		expect([t.state, t.unread, t.unreadReason, t.snoozedUntil]).toEqual(["inbox", true, "Snooze ended", undefined]);
 		expect(names(d, "inbox")[0]).toBe("a");
-		expect(() => life.snooze(d, a, NOW - 1, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.transition(d, a, "snoozed", { until: NOW - 1 }, NOW)).toThrow(m.InvalidInput);
 	});
 
 	test("everything P brings back to the Inbox is unread, saying why", () => {
 		const { d, ids } = setup();
 		const [a, b, c] = ids as [number, number, number];
-		life.snooze(d, a, NOW + H, NOW);
-		life.wake(d, a, NOW);
-		life.settle(d, b, NOW);
-		life.unsettle(d, b, NOW);
-		life.watch(d, c, {}, NOW);
-		life.stopWatching(d, c, NOW);
+		life.transition(d, a, "snoozed", { until: NOW + H }, NOW);
+		life.transition(d, a, "inbox", {}, NOW);
+		life.transition(d, b, "settled", {}, NOW);
+		life.transition(d, b, "inbox", {}, NOW);
+		life.transition(d, c, "watching", { watch: {} }, NOW);
+		life.transition(d, c, "inbox", {}, NOW);
 		expect([a, b, c].map((id) => m.findTask(d, id).unreadReason)).toEqual(["Back from Snoozed", "Reopened from Settled", "Back from Watching"]);
 		// Starting work reads it: you just chose it.
-		life.startWorking(d, a, NOW);
+		life.transition(d, a, "working", {}, NOW);
 		expect(m.findTask(d, a).unread).toBe(false);
 	});
 
@@ -68,7 +68,7 @@ describe("sections", () => {
 		const [a, b] = ids as [number, number];
 		m.updateTask(d, a, { name: "a", due: "2026-11-14 13:00", desc: "", labels: {} }, NOW);
 		m.updateTask(d, b, { name: "b", due: "2026-11-14 13:30", desc: "", labels: {} }, NOW);
-		life.snooze(d, a, NOW + 10 * H, NOW);
+		life.transition(d, a, "snoozed", { until: NOW + 10 * H }, NOW);
 		expect(life.nextWake(d, NOW)).toBe(NOW + H);
 		life.tick(d, NOW + H);
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Due now" });
@@ -85,7 +85,7 @@ describe("sections", () => {
 	test("settled tasks are never marked unread, and nothing settles on its own", () => {
 		const { d, ids } = setup();
 		m.updateTask(d, ids[0]!, { name: "a", due: "2026-11-14", desc: "", labels: {} }, NOW);
-		life.settle(d, ids[0]!, NOW);
+		life.transition(d, ids[0]!, "settled", {}, NOW);
 		life.tick(d, NOW + 48 * H);
 		expect(m.findTask(d, ids[0]!)).toMatchObject({ state: "settled", unread: false });
 		expect(names(d, "inbox")).toEqual(["c", "b"]);
@@ -97,27 +97,27 @@ describe("sections", () => {
 		m.relate(d, blocker, "blocks", blocked, false, NOW);
 		m.relate(d, c1, "parent", parent, false, NOW);
 		m.relate(d, c2, "parent", parent, false, NOW);
-		life.settle(d, blocker, NOW);
+		life.transition(d, blocker, "settled", {}, NOW);
 		expect(m.findTask(d, blocked)).toMatchObject({ unread: true, unreadReason: `Unblocked: #${blocker} is settled` });
-		life.settle(d, c1, NOW);
+		life.transition(d, c1, "settled", {}, NOW);
 		expect(m.findTask(d, parent).unread).toBe(false);
-		life.settle(d, c2, NOW);
+		life.transition(d, c2, "settled", {}, NOW);
 		expect(m.findTask(d, parent)).toMatchObject({ unread: true, unreadReason: "All subtasks are settled" });
 	});
 
 	test("settled shows newest first and un-settle returns to the top of the Inbox", () => {
 		const { d, ids } = setup();
 		const [a, b] = ids as [number, number];
-		life.settle(d, a, NOW);
-		life.settle(d, b, NOW + 1);
+		life.transition(d, a, "settled", {}, NOW);
+		life.transition(d, b, "settled", {}, NOW + 1);
 		expect(names(d, "settled")).toEqual(["b", "a"]);
-		life.unsettle(d, a, NOW);
+		life.transition(d, a, "inbox", {}, NOW);
 		expect(names(d, "inbox")[0]).toBe("a");
 	});
 
 	test("archive hides a task from every section", () => {
 		const { d, ids } = setup();
-		life.startWorking(d, ids[0]!, NOW);
+		life.transition(d, ids[0]!, "working", {}, NOW);
 		life.archive(d, ids[0]!, NOW + H);
 		const t = m.findTask(d, ids[0]!);
 		expect([t.archived, t.state, t.sessions[0]!.end]).toEqual([true, "inbox", NOW + H]);
@@ -134,7 +134,7 @@ describe("ordering", () => {
 		expect(life.move(d, ids[0]!, -1, NOW)).toBe(true);
 		expect(names(d, "inbox")).toEqual(["c", "a", "b"]);
 		expect(life.move(d, ids[2]!, -1, NOW)).toBe(false);
-		life.snooze(d, ids[1]!, NOW + H, NOW);
+		life.transition(d, ids[1]!, "snoozed", { until: NOW + H }, NOW);
 		expect(() => life.move(d, ids[1]!, 1, NOW)).toThrow(m.InvalidInput);
 	});
 
@@ -156,7 +156,10 @@ describe("ordering", () => {
 		life.drop(d, a, "inbox", b, NOW);
 		expect(names(d, "inbox")[0]).toBe("a");
 		expect(() => life.drop(d, a, "snoozed", null, NOW)).toThrow(m.InvalidInput);
-		life.snooze(d, a, NOW + H, NOW);
+		life.transition(d, a, "snoozed", { until: NOW + H }, NOW);
+		// Strict: Snoozed can't jump to Working on it; P back to the Inbox first.
+		expect(() => life.drop(d, a, "working", null, NOW)).toThrow("Bring it back to the Inbox first (P), then start working on it.");
+		life.drop(d, a, "inbox", null, NOW);
 		life.drop(d, a, "working", null, NOW);
 		expect(m.findTask(d, a)).toMatchObject({ state: "working", unread: false });
 	});
@@ -180,8 +183,8 @@ describe("watching", () => {
 	test("watching hides a task until its check-in, then it's on top of the Inbox, unread with why", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
-		life.startWorking(d, a, NOW);
-		life.watch(d, a, { on: " Cobra team ", every: life.WEEKLY, next: at(21) }, NOW + H);
+		life.transition(d, a, "working", {}, NOW);
+		life.transition(d, a, "watching", { watch: { on: " Cobra team ", every: life.WEEKLY, next: at(21) } }, NOW + H);
 		const t = m.findTask(d, a);
 		expect(t.state).toBe("watching");
 		expect(t.watch).toEqual({ on: "Cobra team", since: NOW + H, every: life.WEEKLY, anchor: at(21), next: at(21), checks: 0 });
@@ -201,20 +204,20 @@ describe("watching", () => {
 	test("watching a task a check-in brought back logs the check and keeps the schedule's day and time", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
-		life.watch(d, a, { on: "Cobra team", every: life.WEEKLY, next: at(21) }, NOW);
+		life.transition(d, a, "watching", { watch: { on: "Cobra team", every: life.WEEKLY, next: at(21) } }, NOW);
 		life.tick(d, at(23, 15)); // seen two days late
 		const t = m.findTask(d, a);
 		expect(life.nextOnSchedule(t, at(23, 15))).toBe(at(28));
-		life.watch(d, a, { on: "Cobra team", every: life.WEEKLY, next: at(28), note: "Emailed them again." }, at(23, 15));
+		life.transition(d, a, "watching", { watch: { on: "Cobra team", every: life.WEEKLY, next: at(28), note: "Emailed them again." } }, at(23, 15));
 		expect(t).toMatchObject({ state: "watching", unread: false, watch: { next: at(28), anchor: at(21), since: NOW, checked: at(23, 15), checks: 1 } });
 		expect(t.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.\n\nEmailed them again.");
 		// Changing the watch while it's in Watching isn't a check.
-		life.watch(d, a, { on: "Cobra support", every: life.WEEKLY, next: at(28) }, at(24));
+		life.transition(d, a, "watching", { watch: { on: "Cobra support", every: life.WEEKLY, next: at(28) } }, at(24));
 		expect(t.watch).toMatchObject({ on: "Cobra support", checks: 1 });
 		expect(t.updates).toHaveLength(1);
 		// Off the schedule: weekly from the new date.
 		life.tick(d, at(28));
-		life.watch(d, a, { every: life.WEEKLY, next: at(30, 14) }, at(28, 10));
+		life.transition(d, a, "watching", { watch: { every: life.WEEKLY, next: at(30, 14) } }, at(28, 10));
 		expect(t.watch).toMatchObject({ next: at(30, 14), anchor: at(30, 14), checks: 2 });
 		expect(t.updates.at(-1)!.text).toBe("Checked in: still waiting.");
 		life.tick(d, at(30, 14));
@@ -233,53 +236,56 @@ describe("watching", () => {
 	test("a one-off check-in proposes a week from then; no reminders proposes none", () => {
 		const { d, ids } = setup();
 		const [a, b] = ids as [number, number];
-		life.watch(d, a, { next: at(16) }, NOW);
+		life.transition(d, a, "watching", { watch: { next: at(16) } }, NOW);
 		life.tick(d, at(16));
 		expect(life.nextOnSchedule(m.findTask(d, a), at(16, 10))).toBe(at(23));
-		life.watch(d, b, {}, NOW);
+		life.transition(d, b, "watching", { watch: {} }, NOW);
 		life.tick(d, NOW + 365 * D);
 		expect(m.findTask(d, b).state).toBe("watching");
 		expect(life.nextOnSchedule(m.findTask(d, b), NOW)).toBeUndefined();
 		// A task never watched proposes the default: a week from today at 9:00.
 		expect(life.nextOnSchedule(m.findTask(d, ids[2]!), NOW)).toBe(at(21));
 		// Watching sorts by next check-in, no reminders last.
-		life.watch(d, a, { next: at(23) }, at(16, 10));
+		life.transition(d, a, "watching", { watch: { next: at(23) } }, at(16, 10));
 		expect(names(d, "watching")).toEqual(["a", "b"]);
 	});
 
 	test("watching is validated", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
-		expect(() => life.watch(d, a, { next: NOW - 1 }, NOW)).toThrow(m.InvalidInput);
-		expect(() => life.watch(d, a, { every: life.WEEKLY }, NOW)).toThrow(m.InvalidInput);
-		expect(() => life.watch(d, a, { every: { n: 0, unit: "week" }, next: at(21) }, NOW)).toThrow(m.InvalidInput);
-		expect(() => life.stopWatching(d, a, NOW)).toThrow(m.InvalidInput);
-		life.watch(d, a, {}, NOW);
+		expect(() => life.transition(d, a, "watching", { watch: { next: NOW - 1 } }, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.transition(d, a, "watching", { watch: { every: life.WEEKLY } }, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.transition(d, a, "watching", { watch: { every: { n: 0, unit: "week" }, next: at(21) } }, NOW)).toThrow(m.InvalidInput);
+		expect(() => life.transition(d, a, "inbox", {}, NOW)).toThrow(m.InvalidInput);
+		life.transition(d, a, "watching", { watch: {} }, NOW);
 		expect(() => life.move(d, a, 1, NOW)).toThrow(m.InvalidInput);
 		// The state machine: no Z from Watching or Settled; P brings it back first.
-		expect(() => life.snooze(d, a, NOW + H, NOW)).toThrow("Stop watching it first (P), then snooze it.");
-		life.settle(d, a, NOW);
-		expect(() => life.snooze(d, a, NOW + H, NOW)).toThrow("Reopen it first (P), then snooze it.");
+		expect(() => life.transition(d, a, "snoozed", { until: NOW + H }, NOW)).toThrow("Stop watching it first (P), then snooze it.");
+		life.transition(d, a, "settled", {}, NOW);
+		expect(() => life.transition(d, a, "snoozed", { until: NOW + H }, NOW)).toThrow("Reopen it first (P), then snooze it.");
 	});
 
 	test("starting work, settling or stopping ends the watch; watching again keeps its history", () => {
 		const { d, ids } = setup();
 		const [a, b, c] = ids as [number, number, number];
-		for (const id of ids) life.watch(d, id, { on: "them", every: life.WEEKLY, next: at(21) }, NOW);
+		for (const id of ids) life.transition(d, id, "watching", { watch: { on: "them", every: life.WEEKLY, next: at(21) } }, NOW);
 		life.tick(d, at(21));
-		life.watch(d, a, { on: "someone else", next: at(25) }, at(21, 10));
+		life.transition(d, a, "watching", { watch: { on: "someone else", next: at(25) } }, at(21, 10));
 		expect(m.findTask(d, a).watch).toMatchObject({ on: "someone else", since: NOW, checks: 1, checked: at(21, 10), next: at(25) });
-		life.startWorking(d, a, at(21, 11));
+		// Its next check-in brings it back, still watched; starting work then ends the watch.
+		life.tick(d, at(25));
+		expect(m.findTask(d, a).watch).toBeDefined();
+		life.transition(d, a, "working", {}, at(25));
 		expect(m.findTask(d, a).watch).toBeUndefined();
-		life.settle(d, b, at(21, 11));
+		life.transition(d, b, "settled", {}, at(21, 11));
 		expect(m.findTask(d, b).watch).toBeUndefined();
-		life.watch(d, c, { on: "them", every: life.WEEKLY, next: at(28) }, at(21, 11));
-		life.stopWatching(d, c, at(21, 12));
+		life.transition(d, c, "watching", { watch: { on: "them", every: life.WEEKLY, next: at(28) } }, at(21, 11));
+		life.transition(d, c, "inbox", {}, at(21, 12));
 		expect(m.findTask(d, c)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Watching" });
 		expect(m.findTask(d, c).watch).toBeUndefined();
 		expect(names(d, "inbox")[0]).toBe("c");
 		// From Settled: keep an eye on it after all.
-		life.watch(d, b, {}, at(21, 13));
+		life.transition(d, b, "watching", { watch: {} }, at(21, 13));
 		expect(m.findTask(d, b).state).toBe("watching");
 		expect(m.findTask(d, b).settledAt).toBeUndefined();
 	});
@@ -288,7 +294,7 @@ describe("watching", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
 		m.updateTask(d, a, { name: "a", due: "2026-11-14 15:00", desc: "", labels: {} }, NOW);
-		life.watch(d, a, { on: "Cobra team", every: life.WEEKLY, next: at(21) }, NOW);
+		life.transition(d, a, "watching", { watch: { on: "Cobra team", every: life.WEEKLY, next: at(21) } }, NOW);
 		expect(life.nextWake(d, NOW)).toBe(NOW + 3 * H);
 		life.tick(d, NOW + 3 * H);
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Due now · waiting on Cobra team for less than a day" });
@@ -297,12 +303,12 @@ describe("watching", () => {
 	test("drops in Progressing find the group inside it from the task they land before", () => {
 		const { d, ids } = setup(["w1", "w2", "s1", "s2", "x1", "x2"]);
 		const [w1, w2, s1, s2, x1, x2] = ids as number[] as [number, number, number, number, number, number];
-		life.startWorking(d, w1, NOW);
-		life.startWorking(d, w2, NOW);
-		life.snooze(d, s1, NOW + H, NOW);
-		life.snooze(d, s2, NOW + 2 * H, NOW);
-		life.watch(d, x1, { next: at(20) }, NOW);
-		life.watch(d, x2, { next: at(21) }, NOW);
+		life.transition(d, w1, "working", {}, NOW);
+		life.transition(d, w2, "working", {}, NOW);
+		life.transition(d, s1, "snoozed", { until: NOW + H }, NOW);
+		life.transition(d, s2, "snoozed", { until: NOW + 2 * H }, NOW);
+		life.transition(d, x1, "watching", { watch: { next: at(20) } }, NOW);
+		life.transition(d, x2, "watching", { watch: { next: at(21) } }, NOW);
 		const where = (before: number | null, moving = 99) => life.dropSection(d, "working", before, moving);
 		expect(where(w1)).toBe("working");
 		expect(where(s1)).toBe("working"); // just above the Snoozed header
@@ -312,14 +318,14 @@ describe("watching", () => {
 		expect(where(null)).toBe("watching");
 		expect(life.dropSection(d, "inbox", s1, 99)).toBe("inbox");
 		// Without Watching tasks the end is Snoozed; with neither, Progressing.
-		life.stopWatching(d, x1, NOW);
-		life.stopWatching(d, x2, NOW);
+		life.transition(d, x1, "inbox", {}, NOW);
+		life.transition(d, x2, "inbox", {}, NOW);
 		expect(where(null)).toBe("snoozed");
-		life.wake(d, s1, NOW);
-		life.wake(d, s2, NOW);
+		life.transition(d, s1, "inbox", {}, NOW);
+		life.transition(d, s2, "inbox", {}, NOW);
 		expect(where(null)).toBe("working");
 		// Reordering within Snoozed is fine; dropping into it from elsewhere isn't.
-		life.snooze(d, s1, NOW + H, NOW);
+		life.transition(d, s1, "snoozed", { until: NOW + H }, NOW);
 		expect(() => life.drop(d, s1, "snoozed", null, NOW)).not.toThrow();
 		expect(() => life.drop(d, w1, "snoozed", null, NOW)).toThrow(m.InvalidInput);
 	});
@@ -329,11 +335,60 @@ describe("watching", () => {
 		const [a, b] = ids as [number, number];
 		expect(() => life.drop(d, a, "watching", null, NOW)).toThrow(m.InvalidInput);
 		expect(() => life.drop(d, a, "snoozed", null, NOW)).toThrow(m.InvalidInput);
-		life.watch(d, a, { every: life.WEEKLY, next: at(21) }, NOW);
+		life.transition(d, a, "watching", { watch: { every: life.WEEKLY, next: at(21) } }, NOW);
 		expect(() => life.drop(d, a, "watching", null, NOW)).not.toThrow();
 		life.drop(d, a, "inbox", b, NOW);
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Watching" });
 		expect(m.findTask(d, a).watch).toBeUndefined();
 		expect(names(d, "inbox")).toEqual(["c", "a", "b"]);
+	});
+});
+
+describe("the state machine", () => {
+	/** A fresh task put in `state` by allowed moves only. */
+	function inState(state: m.TaskState) {
+		const { d, ids } = setup(["t"]);
+		const id = ids[0]!;
+		if (state !== "inbox") life.transition(d, id, state, { until: NOW + H, watch: {} }, NOW);
+		return { d, id };
+	}
+	const opts = { until: NOW + 2 * H, watch: {} };
+
+	test("every move in TRANSITIONS works, and every other one is refused without changing anything", () => {
+		for (const from of life.STATES)
+			for (const to of life.STATES) {
+				const { d, id } = inState(from);
+				const before = structuredClone(d);
+				if (life.canTransition(from, to)) {
+					life.transition(d, id, to, opts, NOW + H);
+					expect([from, to, m.findTask(d, id).state]).toEqual([from, to, to]);
+				} else {
+					expect(() => life.transition(d, id, to, opts, NOW + H)).toThrow(m.InvalidInput);
+					expect(d).toEqual(before);
+				}
+			}
+	});
+
+	test("the table: P is the way back, Z/W/S go in, and only Snoozed and Watching move to themselves", () => {
+		for (const from of life.STATES) {
+			const moves = life.TRANSITIONS[from];
+			expect(moves.includes("inbox")).toBe(from !== "inbox");
+			expect(moves.includes("working")).toBe(from === "inbox");
+			expect(moves.includes(from)).toBe(from === "snoozed" || from === "watching");
+			expect(moves.includes("watching")).toBe(true);
+		}
+		expect(life.TRANSITIONS.settled).toEqual(["inbox", "watching"]);
+		expect(life.TRANSITIONS.watching).toEqual(["inbox", "watching", "settled"]);
+	});
+
+	test("refusals say which key helps; archived tasks don't move", () => {
+		const t = (state: m.TaskState) => m.findTask(inState(state).d, 1);
+		expect(life.refusal(t("snoozed"), "working")).toBe("Bring it back to the Inbox first (P), then start working on it.");
+		expect(life.refusal(t("settled"), "snoozed")).toBe("Reopen it first (P), then snooze it.");
+		expect(life.refusal(t("watching"), "snoozed")).toBe("Stop watching it first (P), then snooze it.");
+		expect(life.refusal(t("settled"), "settled")).toBe("Already settled.");
+		const { d, id } = inState("inbox");
+		life.archive(d, id, NOW);
+		for (const to of life.STATES) expect(() => life.transition(d, id, to, opts, NOW)).toThrow("Unarchive it first (A).");
 	});
 });
