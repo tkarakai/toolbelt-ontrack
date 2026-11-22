@@ -26,7 +26,7 @@ describe("sections", () => {
 		expect(life.workingSince(m.findTask(d, a))).toBe(NOW);
 		life.doneForNow(d, a, NOW + 2 * H);
 		const t = m.findTask(d, a);
-		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Progressing"]);
+		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working"]);
 		expect(names(d, "inbox")[0]).toBe("a");
 		life.startWorking(d, a, NOW + 3 * H);
 		expect(t.unread).toBe(false);

@@ -1,8 +1,8 @@
 # Changelog
 
 ## Unreleased
-- **Working is now Progressing.** Snoozed and Watching show as groups inside it, after the tasks in progress, so everything still in motion sits together.
-- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts progressing and is Done for now on a task in progress, S settles and un-settles, Z snoozes and wakes, W watches, A archives. D and the old Wake (W) key are gone.
+- **Progressing** gathers everything still in motion in three groups: Working, Snoozed and Watching. No task sits directly under it.
+- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts working and is Done for now on a task you're working on, S settles and un-settles, Z snoozes and wakes, W watches, A archives. D and the old Wake (W) key are gone.
 - After you create a task, the list selects it.
 - **Pinned is gone.** Labels do the job: give tasks a yes/no label and filter by it. Tasks you had pinned get a yes/no **Pinned** label on upgrade, so you can still find them; delete the label if you don't need it.
 - **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (W) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in a Watching group under Progressing, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.

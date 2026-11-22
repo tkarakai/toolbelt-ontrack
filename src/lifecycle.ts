@@ -1,6 +1,6 @@
 // Where tasks are and how they move, modeled on T3 Code's thread list. A task lives in one home
-// section, from its state: Inbox, Progressing (`working`), Snoozed, Watching or Settled, plus
-// Archive. You play the agent's part today: "Start progressing" is sending the agent a message, "Done for now" is the agent
+// section, from its state: Inbox, Working, Snoozed, Watching or Settled (the middle three shown
+// together under Progressing), plus Archive. You play the agent's part today: "Start working" is sending the agent a message, "Done for now" is the agent
 // finishing its turn. Time and
 // relations can mark tasks unread; nothing settles a task except you.
 import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type Task, type Watch } from "./model";
@@ -107,7 +107,7 @@ export function doneForNow(data: Data, id: number, now: number, before: number |
 	task.state = "inbox";
 	if (before === null) toTop(data, "inbox", id);
 	else place(data, "inbox", id, before);
-	markUnread(task, "Back from Progressing");
+	markUnread(task, "Back from Working");
 	touch(task, now);
 }
 
@@ -197,8 +197,8 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 }
 
 /**
- * Where a drop in Progressing lands. Snoozed and Watching are groups inside it, after its own
- * tasks, and the host reports drops into them as `working`, so `before` tells them apart: before
+ * Where a drop in Progressing lands. Its tasks show in three groups, Working, Snoozed and
+ * Watching, and the host reports every drop into them as `working`, so `before` tells them apart: before
  * a group's first task ends the group above it, before any other joins its group, and at the
  * very end (`null`) it joins the last group shown. Other sections are as reported.
  */
@@ -215,7 +215,7 @@ export function dropSection(data: Data, section: SectionId, before: number | nul
 
 /**
  * A drag: into `section` before task `before`. Within a section it reorders; between sections
- * it's the matching transition (Start progressing, Done for now, Wake, Un-settle,
+ * it's the matching transition (Start working, Done for now, Wake, Un-settle,
  * Settle, Watch, Stop watching). Snoozing needs a time, so nothing drops into Snoozed. Dropped
  * into Watching, a task that was already watched goes back with Still waiting; any other is
  * watched weekly, the default schedule.

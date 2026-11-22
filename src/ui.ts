@@ -181,12 +181,12 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 
 /**
  * Every task action; each row offers the ones that fit its state. One letter per place a task
- * can go, and the same letter brings it back: P Progressing, S Settled, Z Snoozed, W Watching
+ * can go, and the same letter brings it back: P Working, S Settled, Z Snoozed, W Watching
  * (K: still waiting, ⇧W: stop), A Archived. E edits, R relates, U marks read.
  */
 export function taskActions(now: number): Action[] {
 	return [
-		{ id: "start", label: "Start progressing", icon: "play", key: "p", inline: true, group: "flow" },
+		{ id: "start", label: "Start working", icon: "play", key: "p", inline: true, group: "flow" },
 		{ id: "done", label: "Done for now", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "z", inline: true, group: "flow" },
 		{ id: "unsettle", label: "Un-settle", icon: "rotate-ccw", key: "s", inline: true, group: "flow" },
@@ -247,17 +247,19 @@ export function actionsFor(data: Data, task: Task): string[] {
 // ── tasks screen ────────────────────────────────────────────────────────
 
 /**
- * The table's top-level sections. Snoozed and Watching aren't among them: they're groups inside
- * Progressing (`SUBGROUPS`), after its own tasks, so they read as things still in motion.
+ * The table's top-level sections. Progressing (id `working`) has no tasks of its own: its tasks
+ * show in three groups inside it (`SUBGROUPS`), Working, Snoozed and Watching, everything still
+ * in motion.
  */
 export const SECTIONS: (Section & { id: SectionId })[] = [
 	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
-	{ id: "working", label: "Progressing", icon: "play", empty: "Nothing in progress", dropLabel: "Start progressing", dropIcon: "play" },
+	{ id: "working", label: "Progressing", icon: "activity", empty: "Nothing in progress", dropLabel: "Start working", dropIcon: "play" },
 	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
 ];
 
-/** The groups inside Progressing, in the order they show: Snoozed, then Watching. */
+/** The groups inside Progressing, one per state, in the order they show. */
 export const SUBGROUPS = {
+	working: { id: "working", label: "Working", icon: "play" },
 	snoozed: { id: "snoozed", label: "Snoozed", icon: "alarm-clock" },
 	watching: { id: "watching", label: "Watching", icon: "eye" },
 };
@@ -265,9 +267,9 @@ export const SUBGROUPS = {
 /** Every section's tasks in table order (a nested group shows where its first task is). */
 const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
 
-/** A row's group: its section, or Progressing and the group inside it. */
+/** A row's group: its section, or Progressing and the group for its state inside it. */
 function rowGroup(section: SectionId) {
-	return section === "snoozed" || section === "watching" ? ["working", SUBGROUPS[section]] : section;
+	return section === "working" || section === "snoozed" || section === "watching" ? ["working", SUBGROUPS[section]] : section;
 }
 
 function dueCell(task: Task, now: number): Cell {
@@ -335,7 +337,7 @@ function statusOptions(task: Task, now: number) {
 	const at = (ms: number) => stamp(ms, now);
 	return [
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Progressing · since ${at(since)}` : "Progressing" },
+		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
 		{
 			value: "watching",
 			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
@@ -949,18 +951,18 @@ export function quickView(data: Data, now: number): Node {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
-		const subtitle = since ? [`Progressing · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
+		const subtitle = since ? [`Working · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
 			icon: since ? "play" : t.watch ? "eye" : undefined,
-			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Progressing" } : undefined,
+			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
 				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.settle]
-				: [{ id: "start", label: "Start progressing", icon: "play", key: "p" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
+				: [{ id: "start", label: "Start working", icon: "play", key: "p" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {

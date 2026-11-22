@@ -136,7 +136,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					view.dialog = stillWaitingDialog(task, t);
 					return false;
 				}
-				// Within a group inside Progressing, `before` may belong to another group.
+				// Inside Progressing, `before` may belong to another group.
 				life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
 				if (section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
 				return true;

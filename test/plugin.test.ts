@@ -96,15 +96,15 @@ test("start working, done for now, unread until opened", async () => {
 	await event("start", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
-	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Progressing · under a minute" });
+	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working · under a minute" });
 	clock += 25 * 60_000;
 	await event("done", { rowId: "2" });
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
 	const row = rows().find((r) => r.id === "2");
 	expect(row).toMatchObject({ unread: true });
-	expect(row.cells.name.sub).toBe("Back from Progressing");
+	expect(row.cells.name.sub).toBe("Back from Working");
 	expect(row.pane.find((n: any) => n.tone === "muted").text).toContain("25m worked in 1 session");
-	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Progressing", tone: "info" });
+	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working", tone: "info" });
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 	await event("select", { table: "tasks", rowId: "2" });
 	expect(rows().find((r) => r.id === "2").unread).toBeUndefined();
@@ -116,6 +116,8 @@ test("drag between sections performs the matching transition", async () => {
 	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
 	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
+	// Progressing has no tasks of its own: Working, Snoozed and Watching are groups inside it.
+	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working", icon: "play" }]);
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
 	expect(toasts().at(-1)).toMatchObject({ text: "Choose Snooze to pick a wake time.", tone: "error" });
@@ -349,7 +351,7 @@ test("the drawer edits a task in place: name, status, due, labels, description, 
 	// Status moves it through its lifecycle; Snooze asks until when; Settled offers Undo.
 	await event("field", { form: "task", field: "state", value: "working", rowId: "1" });
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("working");
-	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Progressing · since");
+	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working · since");
 	await event("field", { form: "task", field: "state", value: "snoozed", rowId: "1" });
 	expect(tree("screen:tasks").dialog.id).toBe("snooze");
 	await event("dialog-close", { dialog: "snooze" });

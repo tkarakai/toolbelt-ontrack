@@ -15,9 +15,9 @@ Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
 The Tasks table declares `appearance: "document"`, `sections` (inbox, working titled
-Progressing, settled), `reorder` and `selectEvents`; New task has key N. Snoozed and Watching
-rows use a group path inside Progressing (`["working", SUBGROUPS.snoozed]`), so they show as
-groups after its own rows, Snoozed first. The host reports drops into those groups as `working`;
+Progressing, settled), `reorder` and `selectEvents`; New task has key N. Progressing has no rows
+of its own: Working, Snoozed and Watching rows use a group path inside it
+(`["working", SUBGROUPS.snoozed]`), so they show as three groups, in that order. The host reports drops into those groups as `working`;
 `dropSection` tells them apart from `before` (before a group's first row ends the group above,
 `null` joins the last group shown). Saving a new task calls `navigate("tasks", {select})` so the
 list lands on it (optional `navigate` capability). Settings wraps each table in a card
