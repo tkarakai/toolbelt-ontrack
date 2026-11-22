@@ -20,12 +20,17 @@ keeps room for a real agent later.
   **Watching**, tasks out of your hands for now, next check-in first (see [Watching](#watching)).
   No task sits directly under Progressing. **Settled** (done) is a
   collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
-  *Archived* in the toolbar to see them. **New task** is N; once it's saved, the list lands on it.
+  *Archived* in the toolbar to see them, and *Ongoing* to come back. **New task** is N; once it's saved, the list lands on it.
 - **Keys** follow the [state machine](#states-and-keys): P starts work or brings a task back to
   the Inbox; Z, W and S snooze, watch and settle. **A** archives and unarchives. **E** edits,
   **↵** or **⇧U** adds an update, **R** relates, **U** marks read/unread, **⌥↑/⌥↓** move (Inbox
-  and Working on it), and **Delete** is in the ⋯ menu. Settle, snooze, watch, archive and delete
-  offer **Undo** for five seconds.
+  and Working on it), and **Delete** is in the ⋯ menu.
+- **Undo** follows every move between states (by key, drag, the drawer's Status or the quick
+  view) and every removal: archiving or deleting a task, deleting an update, removing a
+  relation, deleting a label or relation type. It lasts as long as its toast (eight seconds) and
+  reverts only the latest change: a newer change, other than opening a task, withdraws it, so
+  Undo never discards work done since. Edits, new tasks and updates, read/unread, unarchiving
+  and reordering don't offer it.
 - **Drag** tasks within the Inbox and Working on it to order them, or between sections. A drop
   is the same move as its key and follows the same [state machine](#states-and-keys): into the
   Inbox is P, onto Settled settles, into Snoozed or Watching opens the same dialog as Z or W, and
@@ -40,8 +45,8 @@ keeps room for a real agent later.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
-- The menu-bar **quick view** is a focus list: what you're working on (with elapsed time and its
-  latest update), then the Inbox in your order. Without opening the window you can
+- The menu-bar **quick view** is a focus list in the table's order: the Inbox, then what you're
+  working on (with elapsed time and its latest update). Each task shows one icon for its state. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop working (P), add an update (U, then ↵),
   settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
   their dialog in the main window, on the task. Enter opens the task in the main window. The

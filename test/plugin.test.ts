@@ -3,6 +3,7 @@ import type { Node, PluginMessage } from "@toolbelt/sdk";
 import { fakeHost } from "@toolbelt/sdk/testing";
 import { addTask, seed, type Data } from "../src/model";
 import { ontrack } from "../src/plugin";
+import { STATE_ICONS } from "../src/ui";
 
 const START = new Date(2026, 10, 14, 12, 0).getTime();
 let clock = START;
@@ -54,6 +55,8 @@ const groupOf = (r: any) => (Array.isArray(r.group) ? r.group.at(-1).id : r.grou
 const bySection = () => Object.fromEntries(["inbox", "working", "snoozed", "watching", "settled"].map((id) => [id, rows().filter((r) => groupOf(r) === id).map((r) => r.cells.name.text)]));
 const lastBadge = () => host!.messages.filter((m) => m.type === "badge").at(-1);
 const toasts = () => host!.messages.filter((m: any) => m.type === "toast") as any[];
+/** What the latest Undo toast's button sends. */
+const undoPayload = () => toasts().filter((t) => t.action?.id === "undo").at(-1).action.payload;
 
 function fixture() {
 	const d = seed();
@@ -96,7 +99,12 @@ test("start working, done for now, unread until opened", async () => {
 	await event("work", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
-	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working on it · under a minute" });
+	expect(quickList().items.find((i: any) => i.id === "2")).toMatchObject({ icon: STATE_ICONS.working, subtitle: "Working on it · under a minute" });
+	// The table's order (the Inbox, then Working on it), one state icon each and no working dot.
+	const quick = quickList().items;
+	expect(quick.at(-1).id).toBe("2");
+	expect(quick.map((i: any) => i.icon)).toEqual([...quick.slice(0, -1).map(() => STATE_ICONS.inbox), STATE_ICONS.working]);
+	expect(quick.find((i: any) => i.id === "2").dot).toBeUndefined();
 	clock += 25 * 60_000;
 	await event("done", { rowId: "2" });
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
@@ -117,7 +125,7 @@ test("drag between sections performs the matching transition", async () => {
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
 	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
 	// Progressing has no tasks of its own: Working, Snoozed and Watching are groups inside it.
-	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working on it", icon: "play" }]);
+	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working on it", icon: STATE_ICONS.working }]);
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	// Dropping into Snoozed asks how long, as Z does; Settled can't be snoozed without P first.
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
@@ -150,12 +158,12 @@ test("Undo restores what settle, archive and delete changed, but only briefly", 
 	const { event } = await start(fixture());
 	await event("settle", { rowId: "1" });
 	expect(bySection().settled).toEqual(["Write spec"]);
-	await event("undo", undefined, "toast");
+	await event("undo", undoPayload(), "toast");
 	expect(bySection().settled).toEqual([]);
 	expect(bySection().inbox).toContain("Write spec");
 	await event("delete", { rowId: "2" });
-	clock += 6_000;
-	await event("undo", undefined, "toast");
+	clock += 9_000;
+	await event("undo", undoPayload(), "toast");
 	expect(toasts().at(-1)).toMatchObject({ text: "Too late to undo.", tone: "error" });
 	expect(rows().some((r) => r.id === "2")).toBe(false);
 	await event("archive", { rowId: "3" });
@@ -307,7 +315,7 @@ test("updates: add several from the dialog, edit one with its times, delete with
 	await event("delete-update", { rowId: "2", target: "2" });
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.id)).toEqual([1]);
 	expect(toasts().at(-1)).toMatchObject({ text: "Deleted an update on #2", action: { id: "undo" } });
-	await event("undo", undefined, "toast");
+	await event("undo", undoPayload(), "toast");
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.id)).toEqual([1, 2]);
 });
 
@@ -429,7 +437,7 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	let row = rows().find((r) => r.id === "1");
 	expect(groupOf(row)).toBe("watching");
 	expect(row.cells.name.sub).toBe("Waiting on Cobra team · less than a day · every 2 weeks");
-	expect(row.cells.when).toMatchObject({ at: nov(20), icon: "eye" });
+	expect(row.cells.when).toMatchObject({ at: nov(20), icon: STATE_ICONS.watching });
 	// In Watching: P back to the Inbox, W change the watch, S settle. No snooze.
 	expect(row.actions.slice(0, 3)).toEqual(["unwatch", "watch", "settle"]);
 	expect(row.actions).not.toContain("snooze");
@@ -448,7 +456,7 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	row = rows().find((r) => r.id === "1");
 	expect(row).toMatchObject({ group: "inbox", unread: true });
 	expect(row.cells.name.sub).toBe("Time to check in · waiting on Cobra team for 5 days · not checked yet · every 2 weeks");
-	expect(row.cells.name.marks).toEqual([{ icon: "eye", tooltip: "Watching: waiting on Cobra team" }]);
+	expect(row.cells.name.marks).toEqual([{ icon: STATE_ICONS.watching, tooltip: "Watching: waiting on Cobra team" }]);
 	expect(lastBadge()).toMatchObject({ value: 1 });
 	const item = quickList().items.find((i: any) => i.id === "1");
 	expect(item.actions.map((a: any) => a.id)).toEqual(["work", "watch", "add-update", "snooze", "settle"]);
@@ -522,4 +530,111 @@ test("every entry point goes through the state machine: keys, drags, Status and 
 	expect(toasts().at(-1)).toMatchObject({ text: "Reopen it first (P), then snooze it.", tone: "error" });
 	await event("reopen", { rowId: "1" });
 	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox", unread: true, unreadReason: "Reopened from Settled" });
+});
+
+test("state icons are the plugin's own monochrome SVGs, declared in the manifest", async () => {
+	const manifest = await Bun.file("toolbelt.json").json();
+	expect(manifest.capabilities.required).toContain("assets");
+	for (const [state, ref] of Object.entries(STATE_ICONS)) {
+		const name = `state-${state}`;
+		expect(ref).toEndWith(`/${name}`);
+		const svg = await Bun.file(manifest.assets[name]).text();
+		// Toolbelt tints an SVG with the text color only when it uses currentColor.
+		expect(svg).toContain("currentColor");
+		expect(svg).not.toMatch(/<script|<style|\bon\w+=|href=/i);
+	}
+});
+
+test("every move offers Undo, whether by key or drag", async () => {
+	const { event } = await start(fixture());
+	await event("work", { rowId: "1" });
+	expect(toasts().at(-1)).toMatchObject({ text: "Working on #1", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(bySection().working).toEqual([]);
+	// A drag into another section is the same move, with the same Undo.
+	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
+	expect(toasts().at(-1)).toMatchObject({ text: "Working on #2", action: { id: "undo" } });
+	await event("done", { rowId: "2" });
+	expect(toasts().at(-1)).toMatchObject({ text: "#2 back in the Inbox", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(bySection().working).toEqual(["Reply to Anna"]);
+	await event("reorder", { table: "tasks", rowId: "2", section: "inbox", before: null });
+	expect(toasts().at(-1)).toMatchObject({ text: "#2 back in the Inbox", action: { id: "undo" } });
+	// Reordering within a section offers nothing.
+	const count = toasts().length;
+	await event("reorder", { table: "tasks", rowId: "1", section: "inbox", before: "3" });
+	expect(toasts().length).toBe(count);
+});
+
+test("Undo reverts only its own change, and never discards a later one", async () => {
+	const { saved, event } = await start(fixture());
+	await event("settle", { rowId: "1" });
+	const first = undoPayload();
+	await event("settle", { rowId: "2" });
+	// The first toast's Undo can't revert the second settle.
+	await event("undo", first, "toast");
+	expect(toasts().at(-1)).toMatchObject({ text: "Only the latest change can be undone.", tone: "error" });
+	expect(bySection().settled).toHaveLength(2);
+	await event("undo", undoPayload(), "toast");
+	expect(bySection().settled).toEqual(["Write spec"]);
+	// Undo is used up.
+	await event("undo", first, "toast");
+	expect(bySection().settled).toEqual(["Write spec"]);
+
+	// A change after the settle withdraws its Undo, so the update isn't lost.
+	await event("settle", { rowId: "3" });
+	await event("add-update", { rowId: "2", text: "Called her" });
+	await event("undo", undoPayload(), "toast");
+	expect(toasts().at(-1)).toMatchObject({ tone: "error" });
+	expect(bySection().settled).toContain("Fix login bug");
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.updates.map((u) => u.text)).toEqual(["Called her"]);
+});
+
+test("opening a task keeps the Undo, and Undo keeps it read", async () => {
+	const d = fixture();
+	d.tasks.find((t) => t.id === 2)!.unread = true;
+	const { event } = await start(d);
+	await event("settle", { rowId: "1" });
+	await event("select", { table: "tasks", rowId: "2" });
+	expect(rows().find((r) => r.id === "2").unread).toBeFalsy();
+	await event("undo", undoPayload(), "toast");
+	expect(bySection().settled).toEqual([]);
+	expect(rows().find((r) => r.id === "2").unread).toBeFalsy();
+});
+
+test("Undo lasts as long as its toast: eight seconds", async () => {
+	const { event } = await start(fixture());
+	await event("settle", { rowId: "1" });
+	clock += 7_000;
+	await event("undo", undoPayload(), "toast");
+	expect(bySection().settled).toEqual([]);
+});
+
+test("removing a relation, a label or a relation type offers Undo", async () => {
+	const { saved, event } = await start(fixture());
+	await event("relate", { rowId: "1" });
+	await event("field", { form: "relate", field: "type", value: "blocks" });
+	await event("field", { form: "relate", field: "to", value: "3" });
+	await event("save", { dialog: "relate" });
+	const relations = () => saved.at(-1)!.tasks.find((t) => t.id === 1)!.relations ?? [];
+	expect(relations()).toHaveLength(1);
+	await event("unrelate", { rowId: "1", target: "1:blocks:3" });
+	expect(relations()).toHaveLength(0);
+	expect(toasts().at(-1)).toMatchObject({ text: "Removed the relation between #1 and #3", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(relations()).toHaveLength(1);
+
+	const labels = saved.at(-1)!.labels.length;
+	await event("delete-label", { rowId: "l1" }, "screen:labels");
+	expect(saved.at(-1)!.labels).toHaveLength(labels - 1);
+	expect(toasts().at(-1)).toMatchObject({ text: "Deleted the label “Project”", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(saved.at(-1)!.labels).toHaveLength(labels);
+
+	const types = saved.at(-1)!.relationTypes.length;
+	await event("delete-relation-type", { rowId: "rsupersedes" }, "screen:labels");
+	expect(saved.at(-1)!.relationTypes).toHaveLength(types - 1);
+	expect(toasts().at(-1)).toMatchObject({ text: "Deleted the relation type “Supersedes”", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(saved.at(-1)!.relationTypes).toHaveLength(types);
 });

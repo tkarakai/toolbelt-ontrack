@@ -22,15 +22,21 @@ const MOVES: Record<string, model.TaskState> = {
 	settle: "settled",
 };
 
-/** How long an Undo stays offered, as in T3 Code. */
-export const UNDO_MS = 5_000;
+/** How long an Undo stays offered: as long as Toolbelt shows a toast with a button. */
+export const UNDO_MS = 8_000;
 /** The longest wait between checks, so a sleeping Mac catches up soon after waking. */
 const TICK_MS = 60_000;
 
 export function ontrack({ load, save, now = Date.now }: Options): PluginDefinition {
 	let data: Data = model.seed();
 	const view: View = initialView();
-	let undo: { data: Data; until: number } | undefined;
+	/**
+	 * The latest change's Undo: the data before it, until when, and the token its toast carries.
+	 * Only that toast can use it, and any later change (but opening a task) withdraws it, so Undo
+	 * never reverts the wrong change or discards work done since.
+	 */
+	let undo: { data: Data; until: number; token: number } | undefined;
+	let undoToken = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let context: Context | undefined;
 
@@ -39,6 +45,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	/** Saves, updates the badge and re-renders after a change that came from the clock. */
 	function onTime() {
 		if (life.tick(data, now()) && context) {
+			undo = undefined;
 			save(data);
 			badge(context);
 			context.invalidate();
@@ -60,9 +67,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 
 	/** Offers Undo for a change that's easy to make by accident. */
 	function offerUndo(c: Context, text: string, before: Data) {
-		undo = { data: before, until: now() + UNDO_MS };
-		c.toast(text, "default", { id: "undo", label: "Undo" });
+		undo = { data: before, until: now() + UNDO_MS, token: ++undoToken };
+		c.toast(text, "default", { id: "undo", label: "Undo", payload: { token: undo.token } });
 	}
+
+	/** What a move offers to undo, by where the task went. */
+	const moved = (id: number, to: model.TaskState) =>
+		to === "working" ? `Working on #${id}` : to === "inbox" ? `#${id} back in the Inbox` : to === "settled" ? `Settled #${id}` : `Moved #${id}`;
 
 	/**
 	 * Moves a task to `to`, the way every entry point does (keys, drags, the drawer's Status, the
@@ -83,7 +94,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			return false;
 		}
 		life.transition(data, task.id, to, { before: at }, t);
-		if (to === "settled") offerUndo(c, `Settled #${task.id}`, before);
+		offerUndo(c, moved(task.id, to), before);
 		return true;
 	}
 
@@ -156,7 +167,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				return moveTo(task, section, c, surface, before, section === "working" || section === "inbox" ? at : null);
 			}
 			case "undo":
-				if (!undo || undo.until < t) throw new InvalidInput("Too late to undo.");
+				if (!undo || undo.until < t || p?.token !== undo.token) throw new InvalidInput(undo && undo.until >= t ? "Only the latest change can be undone." : "Too late to undo.");
 				data = undo.data;
 				undo = undefined;
 				return true;
@@ -274,6 +285,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			case "unrelate": {
 				const [holder, type, target] = String(p?.target ?? "").split(":");
 				model.unrelate(data, Number(holder), type ?? "", Number(target), t);
+				offerUndo(c, `Removed the relation between #${holder} and #${target}`, before);
 				return true;
 			}
 			case "delete":
@@ -288,9 +300,12 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				view.dialog = { kind: "label", id: l.id, draft: { name: l.name, type: l.type, color: l.color, values: l.values.join(", "), freeform: l.freeform, shades: l.shades ?? "" } };
 				return false;
 			}
-			case "delete-label":
-				model.deleteLabel(data, rowId(), t);
+			case "delete-label": {
+				const label = model.findLabel(data, rowId());
+				model.deleteLabel(data, label.id, t);
+				offerUndo(c, `Deleted the label “${label.name}”`, before);
 				return true;
+			}
 			case "new-relation-type":
 				view.dialog = { kind: "relationType", name: "", inverse: "" };
 				return false;
@@ -299,9 +314,12 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				view.dialog = { kind: "relationType", id: rt.id, name: rt.name, inverse: rt.inverse === rt.name ? "" : rt.inverse };
 				return false;
 			}
-			case "delete-relation-type":
-				model.deleteRelationType(data, String(p?.rowId ?? "").slice(1));
+			case "delete-relation-type": {
+				const rt = model.findRelationType(data, String(p?.rowId ?? "").slice(1));
+				model.deleteRelationType(data, rt.id);
+				offerUndo(c, `Deleted the relation type “${rt.name}”`, before);
 				return true;
+			}
 			case "save":
 				if (!dialog) return false;
 				if (dialog.kind === "task") {
@@ -389,10 +407,21 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		onEvent(surface, name, payload, c) {
 			// Work on a copy so a rejected change leaves the data exactly as it was.
 			const before = structuredClone(data);
+			const offered = undo;
 			try {
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
-				if (onEvent(surface, name, payload, c, before) || timed) {
+				const changed = onEvent(surface, name, payload, c, before);
+				// A later change withdraws the standing Undo, which would discard it. Opening a task
+				// only marks it read, so that's copied into the Undo instead.
+				if (undo && undo === offered && (changed || timed)) {
+					if (name !== "select" || timed) undo = undefined;
+					else {
+						const opened = undo.data.tasks.find((x) => String(x.id) === String((payload as { rowId?: unknown })?.rowId));
+						if (opened) life.markRead(opened);
+					}
+				}
+				if (changed || timed) {
 					life.tick(data, now());
 					save(data);
 					badge(c);
@@ -400,6 +429,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				}
 			} catch (e) {
 				data = before;
+				undo = offered;
 				if (!(e instanceof InvalidInput)) throw e;
 				if (view.dialog && name === "save") view.dialog.error = e.message;
 				else c.toast(e.message, "error");

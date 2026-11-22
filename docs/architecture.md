@@ -8,7 +8,7 @@ rendering, plugin installation, the runtime process and managed-data recovery.
 Toolbelt launches the bundled `index.js` with Bun. The plugin uses the public `@toolbelt/sdk`
 package over JSON lines on stdin/stdout; stderr is diagnostic output. UI is a declarative tree;
 Toolbelt keeps selection, typing, scroll and drag feedback. Dialog drafts, search, filters, the
-Tasks/Archived choice and the Undo snapshot live in plugin memory and reset on restart.
+Ongoing/Archived choice and the Undo snapshot live in plugin memory and reset on restart.
 
 The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and `labels` (titled
 Settings, shortcut S; the id stays `labels`),
@@ -74,7 +74,8 @@ Saving moves it to Watching, which counts the check and logs it as an update. Fr
 shows in the main window. A drop into Watching of such a task opens the same dialog.
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
-`focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
+`focus` list (Inbox, then Working on it, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
+its only `dot` marks overdue), whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
 `watch` (W, on tasks back from a check-in; opens the main window), Z also on tasks being worked
 on, and the lifecycle actions.
 
@@ -86,6 +87,7 @@ on, and the lifecycle actions.
 | `src/lifecycle.ts` | The state machine (`TRANSITIONS`, `transition`), sections, ordering, drag moves, unread rules and the clock (`tick`). No I/O. |
 | `src/store.ts` | Loads and atomically saves `ontrack.json` (temporary file, then rename). |
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
+| `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
 | `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4. |
@@ -129,8 +131,12 @@ all its children are settled. Nothing settles automatically. In active mode a ti
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
 
 Each event works on a clone of the data; a rejected change (`InvalidInput`) restores it and shows
-the message in the open dialog or a toast. Settle, snooze, watch, archive, delete and deleting an update keep
-the previous data for five seconds behind the toast's Undo button. Successful changes are written
+the message in the open dialog or a toast. Every state move (`moveTo`, or saving the Snooze and
+Watch dialogs, or a Snooze menu time), archive, and every removal (task, update, relation, label,
+relation type) keep the previous data for `UNDO_MS` (eight seconds, Toolbelt's toast with a
+button) behind the toast's Undo button. The toast's payload carries a token; `undo` accepts only
+the latest token. Any later data change, including a clock tick, withdraws the Undo so restoring
+can't discard it, except `select` marking a task read, which is copied into the snapshot instead. Successful changes are written
 before the event returns, so `prepare` is always ready. Migration upgrades schema 1 (tasks whose
 Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task
 gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (no task is watched yet;

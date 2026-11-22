@@ -1,6 +1,6 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
@@ -233,21 +233,35 @@ export function actionsFor(data: Data, task: Task): string[] {
 // ── tasks screen ────────────────────────────────────────────────────────
 
 /**
+ * OnTrack's own icon per state and group (`assets/state-*.svg`, the Hairline set: thin, quiet
+ * strokes), used wherever a state shows: section and group headers, drop
+ * targets, the When column, the watch mark and the quick view. Actions keep lucide icons.
+ */
+export const STATE_ICONS = {
+	inbox: asset("state-inbox"),
+	progressing: asset("state-progressing"),
+	working: asset("state-working"),
+	snoozed: asset("state-snoozed"),
+	watching: asset("state-watching"),
+	settled: asset("state-settled"),
+};
+
+/**
  * The table's top-level sections. Progressing (id `working`) has no tasks of its own: its tasks
  * show in three groups inside it (`SUBGROUPS`), Working, Snoozed and Watching, everything still
  * in motion.
  */
 export const SECTIONS: (Section & { id: SectionId })[] = [
-	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
-{ id: "working", label: "Progressing", icon: "activity", empty: "Nothing in progress", dropLabel: "Start working on it", dropIcon: "play" },
-	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
+	{ id: "inbox", label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
+	{ id: "working", label: "Progressing", icon: STATE_ICONS.progressing, empty: "Nothing in progress", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+	{ id: "settled", label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
 ];
 
 /** The groups inside Progressing, one per state, in the order they show. */
 export const SUBGROUPS = {
-	working: { id: "working", label: "Working on it", icon: "play" },
-	snoozed: { id: "snoozed", label: "Snoozed", icon: "alarm-clock" },
-	watching: { id: "watching", label: "Watching", icon: "eye" },
+	working: { id: "working", label: "Working on it", icon: STATE_ICONS.working },
+	snoozed: { id: "snoozed", label: "Snoozed", icon: STATE_ICONS.snoozed },
+	watching: { id: "watching", label: "Watching", icon: STATE_ICONS.watching },
 };
 
 /** Every section's tasks in table order (a nested group shows where its first task is). */
@@ -278,11 +292,11 @@ export function watchLine(w: Watch, now: number) {
 
 /** The moment that matters for the task's section. */
 function whenCell(task: Task): Cell {
-	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: "eye" } : { text: "No reminder", icon: "eye", tone: "muted" };
-	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: "alarm-clock" };
-	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: "check" };
+	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: STATE_ICONS.watching } : { text: "No reminder", icon: STATE_ICONS.watching, tone: "muted" };
+	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: STATE_ICONS.snoozed };
+	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: STATE_ICONS.settled };
 	const since = workingSince(task);
-	if (since) return { text: "", at: since, icon: "play" };
+	if (since) return { text: "", at: since, icon: STATE_ICONS.working };
 	return { text: "", at: task.updated };
 }
 
@@ -290,7 +304,7 @@ function whenCell(task: Task): Cell {
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
 	const marks = [
-		...(task.watch && task.state !== "watching" ? [{ icon: "eye", tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
+		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
@@ -459,7 +473,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				label: "Show",
 				value: view.show,
 				options: [
-					{ value: "active", label: "Tasks", icon: "list-checks" },
+					{ value: "active", label: "Ongoing", icon: "list-checks" },
 					{ value: "archived", label: "Archived", icon: "archive", tooltip: "Archived tasks, newest first" },
 				],
 			},
@@ -892,14 +906,14 @@ const latestUpdate = (t: Task) => {
 };
 
 /**
- * The menu-bar quick view: a line to jot a new task into the Inbox (N), then what's in progress
- * and the Inbox, in your order. Each task can be started, stopped, settled, snoozed
- * until tomorrow, or given an update (U) without opening the window; ↵ opens it there.
- * Unread tasks are bold; overdue ones get a red dot.
+ * The menu-bar quick view: a line to jot a new task into the Inbox (N), then the Inbox and what
+ * you're working on, in the table's order. Every task carries one icon, its state's (the table's
+ * section or group icon). Each task can be started, stopped, settled, snoozed or given an update
+ * (U) without opening the window; ↵ opens it there. Unread tasks are bold; overdue ones get a red dot.
  */
 export function quickView(data: Data, now: number): Node {
-	const working = inSection(data, "working");
 	const waiting = inSection(data, "inbox");
+	const working = inSection(data, "working");
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze", label: "Snooze…", icon: "alarm-clock", key: "z" },
@@ -915,8 +929,8 @@ export function quickView(data: Data, now: number): Node {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
-			icon: since ? "play" : t.watch ? "eye" : undefined,
-			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const,pulse: true, label: "Working on it" } : undefined,
+			icon: since ? STATE_ICONS.working : STATE_ICONS.inbox,
+			dot: isOverdue(t, now) ? ("danger" as const) : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
@@ -932,8 +946,8 @@ export function quickView(data: Data, now: number): Node {
 			{
 				type: "list",
 				id: "focus",
-				items: [...working, ...waiting].slice(0, 15).map(item),
-				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
+				items: [...waiting, ...working].slice(0, 15).map(item),
+				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: STATE_ICONS.inbox },
 			},
 		],
 	};
