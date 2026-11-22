@@ -1,6 +1,6 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { HUES, search, type Hue, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, proposedCheck, sectionOf, snoozeChoices, timeSpent, upcomingCheck, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
@@ -221,16 +221,17 @@ export function taskActions(now: number): Action[] {
 }
 
 /** The action ids a task offers, from its state. */
-export function actionsFor(data: Data, task: Task): string[] {
+/** The action ids a task's row offers, from its state; `inPinned`: its copy in Pinned. */
+export function actionsFor(data: Data, task: Task, inPinned = false): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
-	const section = sectionOf(task);
+	const section = inPinned ? "pinned" : sectionOf(task);
 	const ids: string[] = [];
 	if (task.state === "inbox") ids.push("start");
 	if (task.state === "working") ids.push("done");
 	if (task.state === "snoozed") ids.push("wake");
 	// A check-in that came due (or one snoozed since); a task still in Watching isn't due yet.
 	if (task.watch && task.state !== "settled" && task.state !== "watching") ids.push("still-waiting");
-	if (task.state === "settled") ids.push("unsettle", "watch");
+	if (task.state === "settled") ids.push("unsettle", "watch", task.pinned ? "unpin" : "pin");
 	else {
 		ids.push("settle");
 		// Z wakes a snoozed task; snoozing it again goes through the drawer's Status.
@@ -252,7 +253,7 @@ export function actionsFor(data: Data, task: Task): string[] {
  * Progressing (`SUBGROUPS`), after its own tasks, so they read as things still in motion.
  */
 export const SECTIONS: (Section & { id: SectionId })[] = [
-	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks to keep them on top", dropLabel: "Pin", dropIcon: "pin" },
+	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks (⇧P) to see them here too, on top" },
 	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
 	{ id: "working", label: "Progressing", icon: "play", empty: "Nothing in progress", dropLabel: "Start progressing", dropIcon: "play" },
 	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
@@ -265,7 +266,7 @@ export const SUBGROUPS = {
 };
 
 /** Every section's tasks in table order (a nested group shows where its first task is). */
-const SHOWN: SectionId[] = ["pinned", "inbox", "working", "snoozed", "watching", "settled"];
+const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
 
 /** A row's group: its section, or Progressing and the group inside it. */
 function rowGroup(section: SectionId) {
@@ -300,16 +301,33 @@ function whenCell(task: Task): Cell {
 	return { text: "", at: task.updated };
 }
 
-function taskRow(data: Data, task: Task, now: number): Row {
+/** Each home section as a pinned row names it: a label, an icon and the icon's color. */
+export const HOMES: Record<Task["state"], { label: string; icon: string; color?: Hue }> = {
+	inbox: { label: "Inbox", icon: "inbox" },
+	working: { label: "Progressing", icon: "play", color: "sky" },
+	snoozed: { label: "Snoozed", icon: "alarm-clock", color: "amber" },
+	watching: { label: "Watching", icon: "eye", color: "violet" },
+	settled: { label: "Settled", icon: "check", color: "emerald" },
+};
+
+/** The id of a pinned task's second row, in Pinned. Its home row keeps the plain task id. */
+export const pinnedRowId = (id: number) => `p${id}`;
+
+/**
+ * A task's row: at home in its section, or (`inPinned`) its copy in Pinned, which names that
+ * home with an icon and a chip. A pinned home row carries a pin mark.
+ */
+function taskRow(data: Data, task: Task, now: number, inPinned = false): Row {
 	const relations = relationsOf(data, task.id);
+	const home = HOMES[task.state];
 	const marks = [
-		...(task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "In progress", color: "sky" as const }] : []),
+		...(inPinned ? [{ icon: home.icon, tooltip: `At home in ${home.label}`, ...(home.color && { color: home.color }) }] : task.pinned && !task.archived ? [{ icon: "pin", tooltip: "Pinned" }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: "eye", tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
-		id: String(task.id),
-		group: task.archived ? undefined : rowGroup(sectionOf(task)),
+		id: inPinned ? pinnedRowId(task.id) : String(task.id),
+		group: task.archived ? undefined : inPinned ? "pinned" : rowGroup(sectionOf(task)),
 		unread: task.unread || undefined,
 		// The first cell titles the details drawer.
 		cells: {
@@ -318,13 +336,14 @@ function taskRow(data: Data, task: Task, now: number): Row {
 				tags: tags(data, task),
 				sub,
 				marks: marks.length ? marks : undefined,
+				...(inPinned && { chips: [home.label] }),
 			},
 			id: { text: `#${task.id}`, mono: true },
 			due: dueCell(task, now),
 			when: whenCell(task),
 		},
 		pane: taskPane(data, task, now),
-		actions: actionsFor(data, task),
+		actions: actionsFor(data, task, inPinned),
 		targets: relations.length
 			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }
 			: undefined,
@@ -436,8 +455,11 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 	const s = search(view.query);
 	const archived = view.show === "archived";
 	const pool = data.tasks.filter((t) => t.archived === archived);
-	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : SHOWN.flatMap((id) => inSection(data, id));
-	const shown = ordered.filter((t) => matches(data, view, t, s));
+	// Pinned tasks show twice: in Pinned, then at home.
+	const ordered = archived
+		? [...pool].sort((a, b) => b.updated - a.updated).map((task) => ({ task, inPinned: false }))
+		: [...inSection(data, "pinned").map((task) => ({ task, inPinned: true })), ...HOME_ORDER.flatMap((id) => inSection(data, id).map((task) => ({ task, inPinned: false })))];
+	const shown = ordered.filter((r) => matches(data, view, r.task, s));
 	const filters: Filter[] = data.labels.map((label) => {
 		const counts = new Map<string, number>();
 		for (const t of pool) {
@@ -493,7 +515,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				selectEvents: true,
 				// ↵ on a task writes an update in its drawer.
 				enter: "add-update",
-				rows: shown.map((t) => taskRow(data, t, now)),
+				rows: shown.map((r) => taskRow(data, r.task, now, r.inPinned)),
 				actions: taskActions(now),
 				empty: archived
 					? { title: "Nothing archived", description: "Archive tasks you want out of sight but not deleted.", icon: "archive" }
@@ -939,9 +961,10 @@ const latestUpdate = (t: Task) => {
  * Unread tasks are bold; overdue ones get a red dot.
  */
 export function quickView(data: Data, now: number): Node {
-	const working = inSection(data, "working");
-	const pinnedWorking = inSection(data, "pinned").filter((t) => t.state === "working");
-	const waiting = [...inSection(data, "pinned").filter((t) => t.state !== "working"), ...inSection(data, "inbox")];
+	// What's in progress, then the pinned Inbox tasks in Pinned order, then the rest of the Inbox.
+	const pinned = new Set(inSection(data, "pinned").map((t) => t.id));
+	const working = [...inSection(data, "working").filter((t) => pinned.has(t.id)), ...inSection(data, "working").filter((t) => !pinned.has(t.id))];
+	const waiting = [...inSection(data, "pinned").filter((t) => t.state === "inbox"), ...inSection(data, "inbox").filter((t) => !pinned.has(t.id))];
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
@@ -974,7 +997,7 @@ export function quickView(data: Data, now: number): Node {
 			{
 				type: "list",
 				id: "focus",
-				items: [...pinnedWorking, ...working, ...waiting].slice(0, 15).map(item),
+				items: [...working, ...waiting].slice(0, 15).map(item),
 				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
 			},
 		],

@@ -95,9 +95,13 @@ and `inverse`.
 Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `pinned`, `archived`,
 `unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`, `dueAnnounced` (the due value already
 announced, so it's announced once) and `sessions` (`{start, end?, by}`; `by` is `"me"` today and
-leaves room for an agent). The section a task shows in follows from these: settled, then snoozed,
-then watching, then pinned, then working or inbox. Pinning, snoozing and watching keep a
-task's Inbox/Working position.
+leaves room for an agent). A task's home section is its `state` (`sectionOf`). `pinned` is a
+flag on top: Pinned (`inSection(data, "pinned")`) lists every pinned, unarchived task in
+`order.pinned`, and each also shows at home. Its row in Pinned has the id `p<id>` (the home row
+keeps the plain id), group `pinned`, a mark and a chip naming the home (`HOMES`), and `up`/`down`
+that move it within Pinned. Settling keeps the pin; archiving removes it. Drops into or out of
+Pinned are refused (`drop(..., fromPinned)`); drops within it reorder `order.pinned`. Snoozing
+and watching keep a task's Inbox/Working position.
 
 `watch` is `{on?, since, every?, anchor?, next?, checked?, checks}`: who it waits on, when watching
 started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first check-in of the

@@ -1,6 +1,8 @@
-// Where tasks are and how they move, modeled on T3 Code's thread list: Pinned, Inbox, Working,
-// Watching, Snoozed and Settled, plus Archive. You play the agent's part today: "Start working on this"
-// is sending the agent a message, "Done for now" is the agent finishing its turn. Time and
+// Where tasks are and how they move, modeled on T3 Code's thread list. A task lives in one home
+// section, from its state: Inbox, Progressing (`working`), Snoozed, Watching or Settled, plus
+// Archive. Pinned isn't a home: it shows the pinned tasks again, on top. You play the agent's
+// part today: "Start progressing" is sending the agent a message, "Done for now" is the agent
+// finishing its turn. Time and
 // relations can mark tasks unread; nothing settles a task except you.
 import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type Task, type Watch } from "./model";
 
@@ -8,21 +10,18 @@ export const ME = "me";
 
 export type SectionId = "pinned" | "inbox" | "working" | "watching" | "snoozed" | "settled";
 
-/** The section a task shows in (archived tasks show in none). */
+/** The task's home section, from its state (archived tasks show in none). Never Pinned. */
 export function sectionOf(task: Task): SectionId {
-	if (task.state === "settled") return "settled";
-	if (task.state === "snoozed") return "snoozed";
-	if (task.state === "watching") return "watching";
-	if (task.pinned) return "pinned";
-	return task.state === "working" ? "working" : "inbox";
+	return task.state;
 }
 
 /**
  * Tasks in a section, in its order: the person's for Pinned/Inbox/Working, next check-in for
- * Watching (no reminder last), wake time for Snoozed, newest first for Settled.
+ * Watching (no reminder last), wake time for Snoozed, newest first for Settled. Pinned holds
+ * every pinned task, wherever its home is.
  */
 export function inSection(data: Data, section: SectionId): Task[] {
-	const tasks = data.tasks.filter((t) => !t.archived && sectionOf(t) === section);
+	const tasks = data.tasks.filter((t) => !t.archived && (section === "pinned" ? t.pinned : sectionOf(t) === section));
 	if (section === "watching") return tasks.sort((a, b) => (a.watch?.next ?? Infinity) - (b.watch?.next ?? Infinity) || (a.watch?.since ?? 0) - (b.watch?.since ?? 0) || a.id - b.id);
 	if (section === "snoozed") return tasks.sort((a, b) => (a.snoozedUntil ?? 0) - (b.snoozedUntil ?? 0) || a.id - b.id);
 	if (section === "settled") return tasks.sort((a, b) => (b.settledAt ?? 0) - (a.settledAt ?? 0) || b.id - a.id);
@@ -116,14 +115,14 @@ export function doneForNow(data: Data, id: number, now: number, before: number |
 
 export function pin(data: Data, id: number, now: number, before: number | null = null) {
 	const task = findTask(data, id);
-	if (task.state === "settled") fail("Un-settle it first.");
+	if (task.pinned) fail("Already pinned.");
 	task.pinned = true;
 	task.archived = false;
 	place(data, "pinned", id, before);
 	touch(task, now);
 }
 
-/** Back to its section, where it kept its position. */
+/** Off the Pinned list; its home row stays where it was. */
 export function unpin(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	task.pinned = false;
@@ -156,18 +155,18 @@ export function wake(data: Data, id: number, now: number, reason?: string, befor
 	touch(task, now);
 }
 
-/** Done. Settling removes the pin; relations may mark other tasks unread. */
+/** Done; a pinned task stays pinned. Relations may mark other tasks unread. */
 export function settle(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	if (task.state === "settled") fail("Already settled.");
 	endSession(task, now);
 	task.state = "settled";
 	task.settledAt = now;
-	task.pinned = false;
 	delete task.snoozedUntil;
 	delete task.watch;
 	markRead(task);
-	for (const key of ["pinned", "inbox", "working"] as const) data.order[key] = without(data.order[key], id);
+	// A pinned task stays pinned: Pinned shows it, at home in Settled.
+	for (const key of ["inbox", "working"] as const) data.order[key] = without(data.order[key], id);
 	touch(task, now);
 	afterSettle(data, task);
 }
@@ -202,9 +201,9 @@ export function unarchive(data: Data, id: number, now: number) {
 }
 
 /** Up or down one place within Pinned, Inbox or Working. */
-export function move(data: Data, id: number, by: -1 | 1, now: number) {
+export function move(data: Data, id: number, by: -1 | 1, now: number, section: SectionId = sectionOf(findTask(data, id))) {
 	const task = findTask(data, id);
-	const section = sectionOf(task);
+	if (section === "pinned" && !task.pinned) fail("Not pinned.");
 	if (section === "snoozed" || section === "watching" || section === "settled")
 		return fail(
 			section === "snoozed" ? "Snoozed tasks are ordered by wake time." : section === "watching" ? "Watched tasks are ordered by their next check-in." : "Settled tasks are ordered by when they were settled.",
@@ -243,8 +242,15 @@ export function dropSection(data: Data, section: SectionId, before: number | nul
  * into Watching, a task that was already watched goes back with Still waiting; any other is
  * watched weekly, the default schedule.
  */
-export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
+export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number, fromPinned = false) {
 	const task = findTask(data, id);
+	// Pinned only shows pinned tasks again: reorder it, but pin and unpin with the action.
+	if (fromPinned || section === "pinned") {
+		if (!fromPinned) fail("Pin it with ⇧P: Pinned shows pinned tasks, on top of their own sections.");
+		if (section !== "pinned") fail("Unpin it with ⇧P, or drag it in its own section.");
+		place(data, "pinned", id, before);
+		return touch(task, now);
+	}
 	const from = sectionOf(task);
 	if (section === "snoozed") return from === "snoozed" ? undefined : fail("Choose Snooze to pick a wake time.");
 	if (section === "settled") return from === "settled" ? undefined : settle(data, id, now);
@@ -260,8 +266,6 @@ export function drop(data: Data, id: number, section: SectionId, before: number 
 	if (from === "settled") unsettle(data, id, now, before);
 	if (from === "snoozed") wake(data, id, now, undefined, before);
 	if (from === "watching") stopWatching(data, id, now, before);
-	if (section === "pinned") return pin(data, id, now, before);
-	if (from === "pinned") unpin(data, id, now);
 	if (section === "working") {
 		if (task.state !== "working") startWorking(data, id, now);
 		return place(data, "working", id, before);
