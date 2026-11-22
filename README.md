@@ -12,27 +12,40 @@ security sandbox.
 OnTrack borrows the shape of T3 Code's thread list. You play the agent's part today; the model
 keeps room for a real agent later.
 
-- **Tasks** shows six sections. **Pinned** stays on top in your order. **Inbox** holds open tasks
-  in your order; new tasks and tasks that come back land at the top. **Working** is what you're
-  doing now, in your order. **Watching** (collapsed) holds tasks that are out of your hands for
-  now, next check-in first: see [Watching](#watching). **Snoozed** is hidden until its wake time,
-  soonest first. **Settled**
-  (done) is a collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
-  *Archived* in the toolbar to see them. **New task** is N.
-- **Start working on this** (W) moves a task to Working, like sending an agent a message.
-  **Done for now** (D) sends it back to the top of the Inbox, unread, like an agent finishing its
-  turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
-  9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Watch…** (K), **Still
-  waiting…** (K), **Change watch…** (⇧K), **Stop watching**, **Pin/Unpin** (P), **Mark
-  read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Add update**
-  (↵ or ⇧U), **Relate to…** (R) and **Delete** act on the selected task. Settle, snooze, watch,
+- **Tasks** shows four sections. **Pinned** stays on top in your order. **Inbox** holds open
+  tasks in your order; new tasks and tasks that come back land at the top. **Progressing** is
+  what you're doing now, in your order, followed by two groups at the same level as its tasks:
+  **Snoozed**, hidden until its wake time, soonest first, and **Watching**, tasks out of your
+  hands for now, next check-in first (see [Watching](#watching)). **Settled** (done) is a
+  collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
+  *Archived* in the toolbar to see them. **New task** is N; once it's saved, the list lands on it.
+- **Keys** follow one rule: each place a task can go has a letter, and the same letter takes it
+  back. **P** starts progressing (like sending an agent a message) and, on a task in progress, is
+  **Done for now**: back to the top of the Inbox, unread, like an agent finishing its turn.
+  **S** settles and un-settles. **Z** snoozes (3 hours, this evening, tomorrow 9:00, next Monday
+  9:00 or a custom time) and wakes. **W** watches (or changes a watch), **K** says you're still
+  waiting on a check-in that came due, and **⇧W** stops watching. **⇧P** pins and unpins, **A**
+  archives and unarchives. **E** edits, **↵** or **⇧U** adds an update, **R** relates, **U**
+  marks read/unread, **⌥↑/⌥↓** move, and **Delete** is in the ⋯ menu. Settle, snooze, watch,
   still waiting, unpin, archive and delete offer **Undo** for five seconds.
-- **Drag** tasks within Pinned, Inbox and Working to order them, or between sections: into Pinned
-  pins, into Working starts work, Working → Inbox is Done for now, onto Settled settles, out of
-  Snoozed wakes, out of Settled un-settles. Onto Watching watches weekly (a task that was already
-  watched asks to confirm, as Still waiting does); out of Watching stops watching. Nothing drops into Snoozed, which
-  needs a wake time.
-- **Unread** tasks are bold with a blue dot and say why: back from Working, the snooze ended, a
+
+  | Section | Keys |
+  | --- | --- |
+  | Inbox, Pinned | P start · S settle · Z snooze · W watch · ⇧P pin |
+  | Inbox, back from a check-in | P start · K still waiting · W change watch · ⇧W stop watching · S · Z · ⇧P |
+  | Progressing | P done for now · S settle · Z snooze · W watch · ⇧P pin |
+  | Snoozed | Z wake · S settle · W watch · ⇧P pin |
+  | Watching | W change watch · ⇧W stop watching · S settle · ⇧P pin |
+  | Settled | S un-settle · W watch |
+  | Archived | A unarchive · E edit · ⇧U add update |
+
+- **Drag** tasks within Pinned, Inbox and Progressing to order them, or between sections: into
+  Pinned pins, into Progressing starts it, Progressing → Inbox is Done for now, onto Settled
+  settles, out of Snoozed wakes, out of Settled un-settles. Into the Watching group watches weekly
+  (a task that was already watched asks to confirm, as Still waiting does); out of it stops
+  watching. Nothing drops into Snoozed, which needs a wake time. A drop just above a group's
+  header belongs to what's above it; a drop at the very end of Progressing joins its last group.
+- **Unread** tasks are bold with a blue dot and say why: back from Progressing, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
   often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
   task marks it read. Nothing settles on its own.
@@ -40,9 +53,9 @@ keeps room for a real agent later.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
-- The menu-bar **quick view** is a focus list: what you're working on (with elapsed time and its
+- The menu-bar **quick view** is a focus list: what's in progress (with elapsed time and its
   latest update), then Pinned and the Inbox in your order. Without opening the window you can
-  jot a new task into the Inbox (N, then ↵), start or stop work (W/D), add an update (U, then ↵),
+  jot a new task into the Inbox (N, then ↵), start or stop progressing (P), add an update (U, then ↵),
   snooze until tomorrow 9:00 (Z), settle (S) and, on a check-in, say you're still waiting (K,
   which opens the main window to confirm the next check-in). Enter opens the task in the main window. The
   plugin badge counts open tasks that are unread or overdue.
@@ -83,8 +96,8 @@ arrow and Page keys; ⌫ clears. Snooze's picker offers the Snooze menu's times 
 ### Watching
 
 Some tasks aren't done but aren't yours to move right now: you signed up and are waiting for the
-other side to enable it, or something just needs a look once a month. **Watch…** (K, or Watching…
-in the drawer's Status, or a drag onto Watching) puts a task in Watching, from any section,
+other side to enable it, or something just needs a look once a month. **Watch…** (W, or Watching…
+in the drawer's Status, or a drag into the Watching group) puts a task in Watching, from any section,
 Settled included. The Watch dialog asks:
 
 - **Waiting on**: who or what, optional, suggesting the names you used before.
@@ -105,8 +118,8 @@ days ago · every week`. It stays watched, marked with an eye. Then:
   restarts it from there; clearing the date means no reminders. **Keep waiting** writes
   `Checked in: still waiting on Cobra team.` (and your note) as an update and sends the task
   back to Watching.
-- It's on you again: **Start** (W). Working on a task ends its watch.
-- It's finished: **Settle** (S). **Stop watching** turns it into an ordinary task.
+- It's on you again: **Start progressing** (P), which ends its watch.
+- It's finished: **Settle** (S). **Stop watching** (⇧W) turns it into an ordinary task.
 
 A due date arriving brings a watched task back early too. The drawer shows the whole schedule:
 since when, how often, the next check-in, and how many times you checked. Use updates for the

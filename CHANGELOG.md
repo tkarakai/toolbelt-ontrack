@@ -1,7 +1,10 @@
 # Changelog
 
 ## Unreleased
-- **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (K) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in their own collapsed section, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
+- **Working is now Progressing.** Snoozed and Watching show as groups inside it, after the tasks in progress, so everything still in motion sits together.
+- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts progressing and is Done for now on a task in progress, S settles and un-settles, Z snoozes and wakes, W watches, ⇧P pins and unpins, A archives. D and the old Wake (W) and Pin (P) keys are gone.
+- After you create a task, the list selects it.
+- **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (W) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in a Watching group under Progressing, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
 - At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Still waiting… (K, also in the quick view, which opens the window) asks you to confirm the next check-in, proposing the next date on the schedule, and takes an optional note. Pressed before a check-in has come, it says so and lets you keep the upcoming one. It logs the check as an update and sends the task back. Starting work, settling or Stop watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
 - Existing data is upgraded to schema 4; nothing else changes.
 

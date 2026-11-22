@@ -14,8 +14,13 @@ The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working, watching,
-snoozed, settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each table in a card
+The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working titled
+Progressing, settled), `reorder` and `selectEvents`; New task has key N. Snoozed and Watching
+rows use a group path inside Progressing (`["working", SUBGROUPS.snoozed]`), so they show as
+groups after its own rows, Snoozed first. The host reports drops into those groups as `working`;
+`dropSection` tells them apart from `before` (before a group's first row ends the group above,
+`null` joins the last group shown). Saving a new task calls `navigate("tasks", {select})` so the
+list lands on it (optional `navigate` capability). Settings wraps each table in a card
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
@@ -42,6 +47,11 @@ The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from
 `next` as a local datetime and `nextSet`) opens from `watch`, `edit-watch` and the drawer's
 Status. Until the person picks `next`, changing `repeat` moves it to the default for that
 cadence. Saving it offers Undo.
+
+Row keys: P start/done for now, S settle/un-settle, Z snooze/wake, W watch/change watch, ⇧W
+stop watching, K still waiting (only on a task a check-in brought back), ⇧P pin/unpin, A
+archive/unarchive, E edit, ⇧U add update, R relate, U read/unread. Paired actions share a key and
+never appear on the same row.
 
 `still-waiting` (K) always opens the Still waiting dialog (id `stillWaiting`, view state
 `StillWaitingDialog`: `next`, `note`, the `proposed` check-in from `proposedCheck` and the

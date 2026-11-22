@@ -110,7 +110,7 @@ export function doneForNow(data: Data, id: number, now: number, before: number |
 	task.state = "inbox";
 	if (before === null) toTop(data, "inbox", id);
 	else place(data, "inbox", id, before);
-	markUnread(task, "Back from Working");
+	markUnread(task, "Back from Progressing");
 	touch(task, now);
 }
 
@@ -220,6 +220,23 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 }
 
 /**
+ * Where a drop in Progressing lands. Snoozed and Watching are groups inside it, after its own
+ * tasks, and the host reports drops into them as `working`, so `before` tells them apart: before
+ * a group's first task ends the group above it, before any other joins its group, and at the
+ * very end (`null`) it joins the last group shown. Other sections are as reported.
+ */
+export function dropSection(data: Data, section: SectionId, before: number | null, moving: number): SectionId {
+	if (section !== "working") return section;
+	const groups = (["working", "snoozed", "watching"] as const)
+		.map((g) => ({ g, ids: inSection(data, g).map((t) => t.id).filter((x) => x !== moving) }))
+		.filter((x) => x.g === "working" || x.ids.length);
+	if (before === null) return groups.at(-1)!.g;
+	const k = groups.findIndex((x) => x.ids.includes(before));
+	if (k < 0) return "working";
+	return k > 0 && groups[k]!.ids[0] === before ? groups[k - 1]!.g : groups[k]!.g;
+}
+
+/**
  * A drag: into `section` before task `before`. Within a section it reorders; between sections
  * it's the matching transition (Pin, Unpin, Start working, Done for now, Wake, Un-settle,
  * Settle, Watch, Stop watching). Snoozing needs a time, so nothing drops into Snoozed. Dropped
@@ -229,7 +246,7 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
 	const task = findTask(data, id);
 	const from = sectionOf(task);
-	if (section === "snoozed") fail("Choose Snooze to pick a wake time.");
+	if (section === "snoozed") return from === "snoozed" ? undefined : fail("Choose Snooze to pick a wake time.");
 	if (section === "settled") return from === "settled" ? undefined : settle(data, id, now);
 	if (section === "watching") {
 		if (from === "watching") return;

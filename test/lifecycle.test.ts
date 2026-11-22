@@ -26,7 +26,7 @@ describe("sections", () => {
 		expect(life.workingSince(m.findTask(d, a))).toBe(NOW);
 		life.doneForNow(d, a, NOW + 2 * H);
 		const t = m.findTask(d, a);
-		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working"]);
+		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Progressing"]);
 		expect(names(d, "inbox")[0]).toBe("a");
 		life.startWorking(d, a, NOW + 3 * H);
 		expect(t.unread).toBe(false);
@@ -318,6 +318,36 @@ describe("watching", () => {
 		expect(life.nextWake(d, NOW)).toBe(NOW + 3 * H);
 		life.tick(d, NOW + 3 * H);
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Due now · waiting on Cobra team for less than a day" });
+	});
+
+	test("drops in Progressing find the group inside it from the task they land before", () => {
+		const { d, ids } = setup(["w1", "w2", "s1", "s2", "x1", "x2"]);
+		const [w1, w2, s1, s2, x1, x2] = ids as number[] as [number, number, number, number, number, number];
+		life.startWorking(d, w1, NOW);
+		life.startWorking(d, w2, NOW);
+		life.snooze(d, s1, NOW + H, NOW);
+		life.snooze(d, s2, NOW + 2 * H, NOW);
+		life.watch(d, x1, { next: at(20) }, NOW);
+		life.watch(d, x2, { next: at(21) }, NOW);
+		const where = (before: number | null, moving = 99) => life.dropSection(d, "working", before, moving);
+		expect(where(w1)).toBe("working");
+		expect(where(s1)).toBe("working"); // just above the Snoozed header
+		expect(where(s2)).toBe("snoozed");
+		expect(where(x1)).toBe("snoozed"); // just above the Watching header
+		expect(where(x2)).toBe("watching");
+		expect(where(null)).toBe("watching");
+		expect(life.dropSection(d, "inbox", s1, 99)).toBe("inbox");
+		// Without Watching tasks the end is Snoozed; with neither, Progressing.
+		life.stopWatching(d, x1, NOW);
+		life.stopWatching(d, x2, NOW);
+		expect(where(null)).toBe("snoozed");
+		life.wake(d, s1, NOW);
+		life.wake(d, s2, NOW);
+		expect(where(null)).toBe("working");
+		// Reordering within Snoozed is fine; dropping into it from elsewhere isn't.
+		life.snooze(d, s1, NOW + H, NOW);
+		expect(() => life.drop(d, s1, "snoozed", null, NOW)).not.toThrow();
+		expect(() => life.drop(d, w1, "snoozed", null, NOW)).toThrow(m.InvalidInput);
 	});
 
 	test("drag into Watching watches weekly (or is Still waiting); out of it stops watching", () => {

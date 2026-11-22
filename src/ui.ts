@@ -179,12 +179,16 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 
 // ── actions ─────────────────────────────────────────────────────────────
 
-/** Every task action; each row offers the ones that fit its state. */
+/**
+ * Every task action; each row offers the ones that fit its state. One letter per place a task
+ * can go, and the same letter brings it back: P Progressing, S Settled, Z Snoozed, W Watching
+ * (K: still waiting, ⇧W: stop), ⇧P Pinned, A Archived. E edits, R relates, U marks read.
+ */
 export function taskActions(now: number): Action[] {
 	return [
-		{ id: "start", label: "Start working on this", icon: "play", key: "w", inline: true, group: "flow" },
-		{ id: "done", label: "Done for now", icon: "inbox", key: "d", inline: true, group: "flow" },
-		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "w", inline: true, group: "flow" },
+		{ id: "start", label: "Start progressing", icon: "play", key: "p", inline: true, group: "flow" },
+		{ id: "done", label: "Done for now", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "z", inline: true, group: "flow" },
 		{ id: "unsettle", label: "Un-settle", icon: "rotate-ccw", key: "s", inline: true, group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
 		{
@@ -196,11 +200,11 @@ export function taskActions(now: number): Action[] {
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
 		{ id: "still-waiting", label: "Still waiting…", icon: "hourglass", key: "k", inline: true, group: "flow" },
-		{ id: "watch", label: "Watch…", icon: "eye", key: "k", group: "flow" },
-		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "shift+k", group: "flow" },
-		{ id: "stop-watching", label: "Stop watching", icon: "eye-off", group: "flow" },
-		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
-		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
+		{ id: "watch", label: "Watch…", icon: "eye", key: "w", group: "flow" },
+		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "w", group: "flow" },
+		{ id: "stop-watching", label: "Stop watching", icon: "eye-off", key: "shift+w", group: "flow" },
+		{ id: "pin", label: "Pin", icon: "pin", key: "shift+p", group: "flow" },
+		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "shift+p", group: "flow" },
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
@@ -224,11 +228,13 @@ export function actionsFor(data: Data, task: Task): string[] {
 	if (task.state === "inbox") ids.push("start");
 	if (task.state === "working") ids.push("done");
 	if (task.state === "snoozed") ids.push("wake");
-	if (task.watch && task.state !== "settled") ids.push("still-waiting");
+	// A check-in that came due (or one snoozed since); a task still in Watching isn't due yet.
+	if (task.watch && task.state !== "settled" && task.state !== "watching") ids.push("still-waiting");
 	if (task.state === "settled") ids.push("unsettle", "watch");
 	else {
 		ids.push("settle");
-		if (task.state !== "watching") ids.push("snooze");
+		// Z wakes a snoozed task; snoozing it again goes through the drawer's Status.
+		if (task.state !== "watching" && task.state !== "snoozed") ids.push("snooze");
 		ids.push(...(task.watch ? ["edit-watch", "stop-watching"] : ["watch"]), task.pinned ? "unpin" : "pin");
 	}
 	ids.push("edit", "add-update", "relate");
@@ -241,14 +247,30 @@ export function actionsFor(data: Data, task: Task): string[] {
 
 // ── tasks screen ────────────────────────────────────────────────────────
 
+/**
+ * The table's top-level sections. Snoozed and Watching aren't among them: they're groups inside
+ * Progressing (`SUBGROUPS`), after its own tasks, so they read as things still in motion.
+ */
 export const SECTIONS: (Section & { id: SectionId })[] = [
 	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks to keep them on top", dropLabel: "Pin", dropIcon: "pin" },
 	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
-	{ id: "working", label: "Working", icon: "play", empty: "Not working on anything", dropLabel: "Start working", dropIcon: "play" },
-	{ id: "watching", label: "Watching", icon: "eye", empty: "Nothing to keep an eye on", collapsed: true, order: "fixed", dropLabel: "Watch", dropIcon: "eye" },
-	{ id: "snoozed", label: "Snoozed", icon: "alarm-clock", empty: "Nothing snoozed", order: false },
+	{ id: "working", label: "Progressing", icon: "play", empty: "Nothing in progress", dropLabel: "Start progressing", dropIcon: "play" },
 	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
 ];
+
+/** The groups inside Progressing, in the order they show: Snoozed, then Watching. */
+export const SUBGROUPS = {
+	snoozed: { id: "snoozed", label: "Snoozed", icon: "alarm-clock" },
+	watching: { id: "watching", label: "Watching", icon: "eye" },
+};
+
+/** Every section's tasks in table order (a nested group shows where its first task is). */
+const SHOWN: SectionId[] = ["pinned", "inbox", "working", "snoozed", "watching", "settled"];
+
+/** A row's group: its section, or Progressing and the group inside it. */
+function rowGroup(section: SectionId) {
+	return section === "snoozed" || section === "watching" ? ["working", SUBGROUPS[section]] : section;
+}
 
 function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
@@ -281,13 +303,13 @@ function whenCell(task: Task): Cell {
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
 	const marks = [
-		...(task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "Working on it", color: "sky" as const }] : []),
+		...(task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "In progress", color: "sky" as const }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: "eye", tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
 		id: String(task.id),
-		group: task.archived ? undefined : sectionOf(task),
+		group: task.archived ? undefined : rowGroup(sectionOf(task)),
 		unread: task.unread || undefined,
 		// The first cell titles the details drawer.
 		cells: {
@@ -315,7 +337,7 @@ function statusOptions(task: Task, now: number) {
 	const at = (ms: number) => stamp(ms, now);
 	return [
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
+		{ value: "working", label: task.state === "working" && since ? `Progressing · since ${at(since)}` : "Progressing" },
 		{
 			value: "watching",
 			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
@@ -414,7 +436,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 	const s = search(view.query);
 	const archived = view.show === "archived";
 	const pool = data.tasks.filter((t) => t.archived === archived);
-	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : SECTIONS.flatMap((sec) => inSection(data, sec.id));
+	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : SHOWN.flatMap((id) => inSection(data, id));
 	const shown = ordered.filter((t) => matches(data, view, t, s));
 	const filters: Filter[] = data.labels.map((label) => {
 		const counts = new Map<string, number>();
@@ -930,18 +952,18 @@ export function quickView(data: Data, now: number): Node {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
-		const subtitle = since ? [`Working · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
+		const subtitle = since ? [`Progressing · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
 			icon: since ? "play" : t.pinned ? "pin" : t.watch ? "eye" : undefined,
-			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
+			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Progressing" } : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
-				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, later.update, later.settle]
-				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
+				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.settle]
+				: [{ id: "start", label: "Start progressing", icon: "play", key: "p" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {

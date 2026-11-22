@@ -129,13 +129,16 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				const id = Number(p?.rowId);
 				const task = model.findTask(data, id);
 				const watched = task.state === "watching";
+				const at = p?.before ? Number(p.before) : null;
+				const section = life.dropSection(data, p?.section as life.SectionId, at, id);
 				// Back into Watching after a check-in: confirm the next one, as Still waiting does.
-				if (p?.section === "watching" && task.watch && !watched && task.state !== "working") {
+				if (section === "watching" && task.watch && !watched && task.state !== "working") {
 					view.dialog = stillWaitingDialog(task, t);
 					return false;
 				}
-				life.drop(data, id, p?.section as life.SectionId, p?.before ? Number(p.before) : null, t);
-				if (p?.section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
+				// Within a group inside Progressing, `before` may belong to another group.
+				life.drop(data, id, section, section === "working" || section === "pinned" || section === "inbox" ? at : null, t);
+				if (section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
 				return true;
 			}
 			case "undo":
@@ -327,7 +330,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				if (!dialog) return false;
 				if (dialog.kind === "task") {
 					if (dialog.id) model.updateTask(data, dialog.id, dialog.draft, t);
-					else model.addTask(data, dialog.draft, t);
+					else {
+						// Land on the new task in the list once the dialog closes.
+						const task = model.addTask(data, dialog.draft, t);
+						view.dialog = undefined;
+						c.navigate("tasks", { select: String(task.id) });
+						return true;
+					}
 				} else if (dialog.kind === "relate") {
 					if (!dialog.to) throw new InvalidInput("Choose a task.");
 					const inverse = dialog.type.startsWith("~");
