@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.5.0 — 2026-11-22
 - **Progressing** gathers everything still in motion in three groups: Working on it, Snoozed and Watching. No task sits directly under it.
 - **One state machine for every task.** P starts work from the Inbox and brings a task back to the Inbox from anywhere else (Done for now, wake, stop watching, reopen). Z, W and S snooze, watch and settle, or change the snooze or watch when the task is already there. A archives. D and the old Wake (W) and Un-settle (S) keys are gone; the README has the full table.
 - **The state machine is enforced everywhere.** Keys, drags, the drawer's Status and the quick view all make the same moves, and a move the table doesn't allow (such as Snoozed straight to Working on it) is refused with a hint naming the key that helps. The drawer's Status lists only the states a task can move to from where it is, and archived tasks don't move until they're unarchived.
