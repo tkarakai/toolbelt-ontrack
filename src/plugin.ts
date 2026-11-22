@@ -1,11 +1,12 @@
 // Connects the SDK to the model: events change the data or the view, every data change is
 // saved immediately, and the open surfaces re-render. In active mode a timer wakes snoozed
-// tasks and announces due dates; probe mode starts no timers.
+// tasks, brings watched tasks back for their check-ins and announces due dates; probe mode
+// starts no timers.
 import type { Context, PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, settingsScreen, tasksScreen, updateDraft, type View } from "./ui";
+import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
@@ -39,6 +40,12 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		timer = setTimeout(onTime, Math.max(1_000, Math.min(TICK_MS, (next ?? Infinity) - now())));
 	}
 
+	/** "next check-in Mon, Dec 1, 9:00 AM", or "no reminders": where a watched task stands. */
+	const nextCheckIn = (id: number) => {
+		const next = model.findTask(data, id).watch?.next;
+		return next === undefined ? "no reminders" : `next check-in ${new Date(next).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+	};
+
 	/** Offers Undo for a change that's easy to make by accident. */
 	function offerUndo(c: Context, text: string, before: Data) {
 		undo = { data: before, until: now() + UNDO_MS };
@@ -57,6 +64,15 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			if (to === "snoozed") {
 				view.dialog = { kind: "snooze", id: task.id, until: defaultSnooze(t) };
 				return false;
+			}
+			if (to === "watching") {
+				view.dialog = watchDialog(task, t);
+				return false;
+			}
+			// Moved out of Watching by hand: it's no longer watched (Working and Settled end it too).
+			if (task.state === "watching" && to === "inbox") {
+				life.stopWatching(data, task.id, t);
+				return true;
 			}
 			if (task.state === "settled") life.unsettle(data, task.id, t);
 			else if (task.state === "snoozed") life.wake(data, task.id, t);
@@ -109,9 +125,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				life.markRead(task);
 				return true;
 			}
-			case "reorder":
-				life.drop(data, Number(p?.rowId), p?.section as life.SectionId, p?.before ? Number(p.before) : null, t);
+			case "reorder": {
+				const id = Number(p?.rowId);
+				const watched = model.findTask(data, id).state === "watching";
+				life.drop(data, id, p?.section as life.SectionId, p?.before ? Number(p.before) : null, t);
+				if (p?.section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
 				return true;
+			}
 			case "undo":
 				if (!undo || undo.until < t) throw new InvalidInput("Too late to undo.");
 				data = undo.data;
@@ -130,6 +150,10 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					if (p.field === "to") dialog.to = String(value);
 				} else if (dialog?.kind === "snooze" && p?.form === "snooze") {
 					dialog.until = String(value);
+				} else if (dialog?.kind === "watch" && p?.form === "watch") {
+					if (p.field === "on") dialog.on = String(value);
+					if (p.field === "repeat") setRepeat(dialog, String(value), t);
+					if (p.field === "next") (dialog.next = String(value)), (dialog.nextSet = true);
 				} else if (dialog?.kind === "label" && p?.form === "label") {
 					const d = dialog.draft;
 					if (p.field === "name" || p.field === "values" || p.field === "color" || p.field === "shades") d[p.field as "name"] = String(value);
@@ -167,6 +191,17 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			case "snooze":
 				view.dialog = { kind: "snooze", id: model.findTask(data, rowId()).id, until: defaultSnooze(t) };
 				return false;
+			case "watch":
+			case "edit-watch":
+				view.dialog = watchDialog(model.findTask(data, rowId()), t);
+				return false;
+			case "still-waiting":
+				life.stillWaiting(data, rowId(), t, typeof p?.text === "string" ? p.text : "");
+				offerUndo(c, `Still waiting on ${name2(rowId())} · ${nextCheckIn(rowId())}`, before);
+				return true;
+			case "stop-watching":
+				life.stopWatching(data, rowId(), t);
+				return true;
 			case "pin":
 				life.pin(data, rowId(), t);
 				return true;
@@ -284,6 +319,18 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					const due = model.parseDue(dialog.until) ?? "";
 					if (!due) throw new InvalidInput("Choose when it should come back.");
 					life.snooze(data, dialog.id, model.dueAt(due.includes("T") ? due : `${due}T09:00`), t);
+				} else if (dialog.kind === "watch") {
+					const repeat = REPEATS.find((r) => r.id === dialog.repeat) ?? REPEATS[0]!;
+					let next: number | undefined;
+					if (repeat.id !== "none") {
+						const due = model.parseDue(dialog.next) ?? "";
+						if (!due) throw new InvalidInput("Choose when to check in, or No reminders.");
+						next = model.dueAt(due.includes("T") ? due : `${due}T09:00`);
+					}
+					life.watch(data, dialog.id, { on: dialog.on, every: repeat.every, next }, t);
+					view.dialog = undefined;
+					offerUndo(c, `Watching ${name2(dialog.id)} · ${nextCheckIn(dialog.id)}`, before);
+					return true;
 				} else if (dialog.kind === "updates") {
 					const e = dialog.editing;
 					if (!e) {

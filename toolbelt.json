@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "ontrack",
   "name": "OnTrack",
-  "description": "Tasks you manage yourself: an Inbox, Working, Snoozed and Settled, with colored labels, due dates and related tasks.",
+  "description": "Tasks you manage yourself: an Inbox, Working, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
   "icon": "list-checks",
   "version": "0.4.0",
   "protocol": 1,
@@ -32,7 +32,7 @@
     "optional": []
   },
   "data": {
-    "schema": 3
+    "schema": 4
   },
   "migration": {
     "entry": "migrate.js"

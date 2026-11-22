@@ -14,8 +14,8 @@ The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working, snoozed,
-settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each table in a card
+The Tasks table declares `appearance: "document"`, `sections` (pinned, inbox, working, watching,
+snoozed, settled), `reorder` and `selectEvents`; New task has key N. Settings wraps each table in a card
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
@@ -38,9 +38,14 @@ it mounts fresh, empty and focused (`autofocus`). Timeline actions arrive with
 `{timeline, entryId}`; in the drawer they carry `rowId` instead of a dialog. The dialog remains
 for narrow windows and for Change times…, which opens it on one update (`closeAfter`).
 
+The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from `REPEATS`,
+`next` as a local datetime and `nextSet`) opens from `watch`, `edit-watch` and the drawer's
+Status. Until the person picks `next`, changing `repeat` moves it to the default for that
+cadence. `still-waiting` (K) accepts an optional `text` note; it and saving the dialog offer Undo.
+
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
-`focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z) and the
-lifecycle actions.
+`focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
+`still-waiting` (K, on watched tasks) and the lifecycle actions.
 
 ## Code ownership
 
@@ -52,12 +57,12 @@ lifecycle actions.
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 3 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+Schema 4 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
 `relationTypes` and `order` (`pinned`, `inbox`, `working`: task ids in the person's order). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
@@ -69,14 +74,24 @@ wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a ti
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
 
-Each task has `state` (`inbox`, `working`, `snoozed`, `settled`), `pinned`, `archived`, `unread`
-with `unreadReason`, `snoozedUntil`, `settledAt`, `dueAnnounced` (the due value already
+Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `pinned`, `archived`,
+`unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`, `dueAnnounced` (the due value already
 announced, so it's announced once) and `sessions` (`{start, end?, by}`; `by` is `"me"` today and
 leaves room for an agent). The section a task shows in follows from these: settled, then snoozed,
-then pinned, then working or inbox. Pinning and snoozing keep a task's Inbox/Working position.
+then watching, then pinned, then working or inbox. Pinning, snoozing and watching keep a
+task's Inbox/Working position.
 
-The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), wakes snoozed tasks
-whose due date arrived and marks open tasks unread when their due date arrives ("Due now").
+`watch` is `{on?, since, every?, anchor?, next?, checked?, checks}`: who it waits on, when watching
+started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first check-in of the
+current schedule, the next check-in, the last Still waiting and how many there were. Repeats are
+`anchor` plus whole cadences on the local calendar (`addCadence`, month ends clamp), so the day
+and time never drift. No `next` means no reminders. A check-in moves the task to the Inbox but
+keeps `watch`, so Still waiting can send it back; `startWorking`, `settle` and `stopWatching`
+delete it.
+
+The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks
+whose check-in came due to the top of the Inbox (unread, with `checkInReason`: who, how long, the
+last check, the cadence), wakes snoozed and watched tasks whose due date arrived and marks open tasks unread when their due date arrives ("Due now").
 Settling marks tasks it blocked unread once nothing else blocks them, and a parent unread once
 all its children are settled. Nothing settles automatically. In active mode a timer runs `tick` at
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
@@ -86,7 +101,8 @@ the message in the open dialog or a toast. Settle, snooze, unpin, archive, delet
 the previous data for five seconds behind the toast's Undo button. Successful changes are written
 before the event returns, so `prepare` is always ready. Migration upgrades schema 1 (tasks whose
 Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task
-gets an empty `updates` list and `nextUpdateId` starts at 1).
+gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (only the schema number
+changes; no task is watched yet).
 
 ## Tests
 

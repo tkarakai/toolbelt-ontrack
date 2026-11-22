@@ -1,13 +1,14 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
-import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update } from "./model";
+import { cadenceLabel, defaultCheck, duration, inSection, sectionOf, snoozeChoices, timeSpent, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
+	| WatchDialog
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
@@ -27,6 +28,45 @@ export type View = {
 	show: "active" | "archived";
 	dialog?: Dialog;
 };
+
+/**
+ * The Watch dialog's fields as shown: who it waits on, a `repeat` choice (see `REPEATS`) and the
+ * next check-in as a local datetime. `nextSet`: the person picked the date, so changing the
+ * repeat no longer moves it.
+ */
+export type WatchDialog = { kind: "watch"; id: number; on: string; repeat: string; next: string; nextSet?: boolean; error?: string };
+
+/** How often to check in, as the Watch dialog offers it. `once` and `none` have no cadence. */
+export const REPEATS: { id: string; label: string; every?: Cadence }[] = [
+	{ id: "week", label: "Every week", every: WEEKLY },
+	{ id: "2weeks", label: "Every 2 weeks", every: { n: 2, unit: "week" } },
+	{ id: "month", label: "Every month", every: { n: 1, unit: "month" } },
+	{ id: "3months", label: "Every 3 months", every: { n: 3, unit: "month" } },
+	{ id: "day", label: "Every day", every: { n: 1, unit: "day" } },
+	{ id: "once", label: "Once" },
+	{ id: "none", label: "No reminders: I'll look myself" },
+];
+
+const repeatOf = (w: Watch | undefined) => {
+	if (!w) return "week";
+	if (!w.every) return w.next === undefined ? "none" : "once";
+	return REPEATS.find((r) => r.every?.n === w.every!.n && r.every.unit === w.every!.unit)?.id ?? "week";
+};
+
+/** The Watch dialog for a task: its current watch, or the default (weekly, a week from today at 9:00). */
+export function watchDialog(task: Task, now: number): WatchDialog {
+	const w = task.watch;
+	const repeat = repeatOf(w);
+	const upcoming = w?.next !== undefined && w.next > now ? w.next : undefined;
+	const next = upcoming ?? defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every);
+	return { kind: "watch", id: task.id, on: w?.on ?? "", repeat, next: toLocalInput(next), ...(upcoming !== undefined && { nextSet: true }) };
+}
+
+/** A new repeat choice; the next check-in follows it unless the person picked one. */
+export function setRepeat(dialog: WatchDialog, repeat: string, now: number) {
+	dialog.repeat = repeat;
+	if (!dialog.nextSet) dialog.next = toLocalInput(defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every));
+}
 
 export const initialView = (): View => ({ query: "", filters: {}, show: "active" });
 
@@ -108,7 +148,7 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 		const value = task.labels[id.slice("label:".length)];
 		if (value === undefined || !values.includes(optionValue(value))) return false;
 	}
-	return s.test([`#${task.id}`, task.name, task.desc, ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
+	return s.test([`#${task.id}`, task.name, task.desc, task.watch?.on ?? "", ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
 }
 
 // ── actions ─────────────────────────────────────────────────────────────
@@ -129,6 +169,10 @@ export function taskActions(now: number): Action[] {
 			group: "flow",
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
+		{ id: "still-waiting", label: "Still waiting", icon: "hourglass", key: "k", inline: true, group: "flow" },
+		{ id: "watch", label: "Watch…", icon: "eye", key: "k", group: "flow" },
+		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "shift+k", group: "flow" },
+		{ id: "stop-watching", label: "Stop watching", icon: "eye-off", group: "flow" },
 		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
 		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
@@ -154,8 +198,13 @@ export function actionsFor(data: Data, task: Task): string[] {
 	if (task.state === "inbox") ids.push("start");
 	if (task.state === "working") ids.push("done");
 	if (task.state === "snoozed") ids.push("wake");
-	if (task.state === "settled") ids.push("unsettle");
-	else ids.push("settle", "snooze", task.pinned ? "unpin" : "pin");
+	if (task.watch && task.state !== "settled") ids.push("still-waiting");
+	if (task.state === "settled") ids.push("unsettle", "watch");
+	else {
+		ids.push("settle");
+		if (task.state !== "watching") ids.push("snooze");
+		ids.push(...(task.watch ? ["edit-watch", "stop-watching"] : ["watch"]), task.pinned ? "unpin" : "pin");
+	}
 	ids.push("edit", "add-update", "relate");
 	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
@@ -170,6 +219,7 @@ export const SECTIONS: (Section & { id: SectionId })[] = [
 	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks to keep them on top", dropLabel: "Pin", dropIcon: "pin" },
 	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
 	{ id: "working", label: "Working", icon: "play", empty: "Not working on anything", dropLabel: "Start working", dropIcon: "play" },
+	{ id: "watching", label: "Watching", icon: "eye", empty: "Nothing to keep an eye on", collapsed: true, order: "fixed", dropLabel: "Watch", dropIcon: "eye" },
 	{ id: "snoozed", label: "Snoozed", icon: "alarm-clock", empty: "Nothing snoozed", order: false },
 	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
 ];
@@ -180,8 +230,21 @@ function dueCell(task: Task, now: number): Cell {
 	return { text: friendlyDue(task.due, now), tone: overdue ? "danger" : undefined, icon: overdue ? "alarm-clock" : undefined };
 }
 
+/** "Waiting on Cobra team · 3 weeks · every week · checked 2×": a watched task's second line. */
+export function watchLine(w: Watch, now: number) {
+	return [
+		w.on ? `Waiting on ${w.on}` : "Watching",
+		duration(now - w.since),
+		w.every ? cadenceLabel(w.every).toLowerCase() : w.next === undefined ? "no reminders" : undefined,
+		w.checks ? `checked ${w.checks}×` : undefined,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /** The moment that matters for the task's section. */
 function whenCell(task: Task): Cell {
+	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: "eye" } : { text: "No reminder", icon: "eye", tone: "muted" };
 	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: "alarm-clock" };
 	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: "check" };
 	const since = workingSince(task);
@@ -191,6 +254,11 @@ function whenCell(task: Task): Cell {
 
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
+	const marks = [
+		...(task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "Working on it", color: "sky" as const }] : []),
+		...(task.watch && task.state !== "watching" ? [{ icon: "eye", tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
+	];
+	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
 		id: String(task.id),
 		group: task.archived ? undefined : sectionOf(task),
@@ -200,8 +268,8 @@ function taskRow(data: Data, task: Task, now: number): Row {
 			name: {
 				text: task.name,
 				tags: tags(data, task),
-				sub: task.unread && task.unreadReason ? task.unreadReason : snippet(task.desc),
-				marks: task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "Working on it", color: "sky" }] : undefined,
+				sub,
+				marks: marks.length ? marks : undefined,
 			},
 			id: { text: `#${task.id}`, mono: true },
 			due: dueCell(task, now),
@@ -222,9 +290,27 @@ function statusOptions(task: Task, now: number) {
 	return [
 		{ value: "inbox", label: "Inbox" },
 		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
+		{
+			value: "watching",
+			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
+		},
 		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
 		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
 	];
+}
+
+/** A watched task's schedule, in full: who, since when, how often, next and last check. */
+function watchFacts(task: Task, now: number) {
+	const w = task.watch!;
+	const at = (ms: number) => stamp(ms, now);
+	return [
+		w.on ? `Waiting on ${w.on} since ${at(w.since)}` : `Watching since ${at(w.since)}`,
+		w.every ? cadenceLabel(w.every) : undefined,
+		task.state === "watching" ? (w.next !== undefined ? `next check-in ${at(w.next)}` : "no reminders") : "check-in due",
+		w.checked !== undefined ? `checked ${w.checks}×, last ${at(w.checked)}` : "not checked yet",
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 /** One quiet line of facts under the properties: id, pin, time spent, when it was made and changed. */
@@ -263,6 +349,7 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
 			],
 		},
+		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
 		{ type: "text", text: factsLine(task, now), tone: "muted" },
 		...(relations.length
 			? [
@@ -317,11 +404,12 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 			selected: view.filters[`label:${label.id}`] ?? [],
 		};
 	});
-	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled");
+	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
+	const watching = data.tasks.filter((t) => !t.archived && t.state === "watching").length;
 	const unread = open.filter((t) => t.unread).length;
 	const summary = archived
 		? `${shown.length} archived`
-		: `${open.length} open${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
+		: `${open.length} open${watching ? ` · ${watching} watching` : ""}${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
 	return {
 		type: "page",
 		search: { placeholder: "Search tasks" },
@@ -366,7 +454,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog && ["task", "relate", "snooze", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
+		dialog: view.dialog &&["task", "relate", "snooze", "watch", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
@@ -580,6 +668,57 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 				],
 			};
 		}
+		case "watch": {
+			const repeat = REPEATS.find((r) => r.id === dialog.repeat);
+			const known = [...new Set(data.tasks.map((t) => t.watch?.on).filter((v): v is string => !!v))].sort((a, b) => a.localeCompare(b));
+			const d = new Date(now);
+			const day = (days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 9, 0).getTime();
+			const presets = [
+				{ label: "Tomorrow 9:00", value: toLocalInput(day(1)) },
+				{ label: "In 3 days", value: toLocalInput(day(3)) },
+				{ label: "In a week", value: toLocalInput(day(7)) },
+				{ label: "In 2 weeks", value: toLocalInput(day(14)) },
+				{ label: "In a month", value: toLocalInput(defaultCheck(now, { n: 1, unit: "month" })) },
+			];
+			return {
+				id: "watch",
+				title: `Watch ${taskName(data, dialog.id)}`,
+				description: "Out of your hands for now. At each check-in it comes back to the top of the Inbox, unread, saying why; Still waiting (K) sends it back here.",
+				actions: [{ ...save, label: "Watch" }],
+				children: [
+					...error(dialog.error),
+					{
+						type: "form",
+						id: "watch",
+						fields: [
+							{
+								type: "combobox",
+								id: "on",
+								label: "Waiting on",
+								value: dialog.on,
+								freeform: true,
+								placeholder: "Who or what (optional)",
+								options: known.map((v) => ({ value: v, label: v })),
+							},
+							{ type: "select", id: "repeat", label: "Check in", value: dialog.repeat, options: REPEATS.map((r) => ({ value: r.id, label: r.label })) },
+							...(dialog.repeat === "none"
+								? []
+								: [
+										{
+											type: "datetime" as const,
+											id: "next",
+											label: repeat?.every ? "First check-in" : "Check in on",
+											value: dialog.next,
+											placeholder: "Pick when to check in",
+											presets,
+											description: repeat?.every ? `Then ${cadenceLabel(repeat.every).toLowerCase()}, on the same day and time. A date alone means 9:00.` : "A date alone means 9:00 that day.",
+										},
+									]),
+						],
+					},
+				],
+			};
+		}
 		case "label": {
 			const d = dialog.draft;
 			return {
@@ -726,6 +865,7 @@ export function quickView(data: Data, now: number): Node {
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
+		stillWaiting: { id: "still-waiting", label: "Still waiting", icon: "hourglass", key: "k" },
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};
 	const item = (t: Task) => {
@@ -737,13 +877,13 @@ export function quickView(data: Data, now: number): Node {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
-			icon: since ? "play" : t.pinned ? "pin" : undefined,
+			icon: since ? "play" : t.pinned ? "pin" : t.watch ? "eye" : undefined,
 			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
 				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, later.update, later.settle]
-				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, later.update, later.snooze, later.settle],
+				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {

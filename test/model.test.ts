@@ -162,9 +162,16 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	expect(() => m.upgrade1to2(d)).toThrow(m.InvalidInput);
 	const three = m.upgrade2to3(d);
 	expect(three).toMatchObject({ schema: 3, nextUpdateId: 1 });
-	expect(three.tasks.map((t) => t.updates)).toEqual([[], []]);
-	expect(m.parseData(JSON.parse(JSON.stringify(three)))).toEqual(JSON.parse(JSON.stringify(three)));
+	expect(three.tasks.map((t: m.Task) => t.updates)).toEqual([[], []]);
 	expect(() => m.upgrade2to3(three)).toThrow(m.InvalidInput);
+	const four = m.upgrade3to4(three);
+	expect(four.schema).toBe(4);
+	expect(m.parseData(JSON.parse(JSON.stringify(four)))).toEqual(JSON.parse(JSON.stringify(four)));
+	expect(() => m.upgrade3to4(four)).toThrow(m.InvalidInput);
+	// A damaged watch fails loudly.
+	const bad = JSON.parse(JSON.stringify(four));
+	bad.tasks[0].watch = { since: "yesterday" };
+	expect(() => m.parseData(bad)).toThrow(m.InvalidInput);
 });
 
 describe("updates", () => {

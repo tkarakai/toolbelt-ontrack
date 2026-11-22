@@ -2,7 +2,7 @@
 // so every rule is testable on plain objects.
 import { HUES, type Hue } from "@toolbelt/sdk";
 
-export const SCHEMA = 3;
+export const SCHEMA = 4;
 
 export type LabelType = "string" | "bool";
 
@@ -39,9 +39,37 @@ export type Relation = { task: number; type: string };
 
 /**
  * Where a task is in its life, as in T3 Code's thread list: waiting in the Inbox, being worked on,
- * snoozed until a time, or settled (done). Pinning and archiving are separate flags on top.
+ * snoozed until a time, watched (out of your hands for now, checked on from time to time) or
+ * settled (done). Pinning and archiving are separate flags on top.
  */
-export type TaskState = "inbox" | "working" | "snoozed" | "settled";
+export type TaskState = "inbox" | "working" | "snoozed" | "watching" | "settled";
+
+export type CadenceUnit = "day" | "week" | "month";
+export const CADENCE_UNITS: readonly CadenceUnit[] = ["day", "week", "month"];
+/** How often a watched task asks to be checked on: every `n` days, weeks or months. */
+export type Cadence = { n: number; unit: CadenceUnit };
+
+/**
+ * A task you keep an eye on: someone else has the ball, or it just needs checking now and then.
+ * It stays with the task while it's watched and after a check-in brings it back to the Inbox,
+ * so Still waiting can send it back; starting work, settling or Stop watching ends it.
+ */
+export type Watch = {
+	/** Who or what it's waiting on ("Cobra team"). */
+	on?: string;
+	/** Epoch ms watching started. */
+	since: number;
+	/** Repeat; absent means one check-in (or none, without `next`). */
+	every?: Cadence;
+	/** The first check-in of the current schedule; repeats count from it, keeping its day and time. */
+	anchor?: number;
+	/** The next check-in (while watching), or the one that brought it back. Absent: no reminders. */
+	next?: number;
+	/** Epoch ms of the last Still waiting. */
+	checked?: number;
+	/** How many times it was checked on. */
+	checks: number;
+};
 
 /** A stretch of work on a task, by whoever worked on it ("me" now; an agent later). */
 export type Session = { start: number; end?: number; by: string };
@@ -76,6 +104,8 @@ export type Task = {
 	unreadReason?: string;
 	/** Epoch ms the snooze ends (state `snoozed`). */
 	snoozedUntil?: number;
+	/** Watching it: who it's waiting on and when to check in. */
+	watch?: Watch;
 	/** Epoch ms it was settled (state `settled`). */
 	settledAt?: number;
 	/** The `due` value whose arrival was already announced, so it's announced once. */
@@ -440,6 +470,7 @@ export function parseData(value: unknown): Data {
 	if (!Array.isArray(d.tasks) || !Array.isArray(d.labels) || !Array.isArray(d.relationTypes)) fail("The data file is damaged.");
 	if (!Number.isInteger(d.nextTaskId) || !Number.isInteger(d.nextLabelId) || !Number.isInteger(d.nextUpdateId)) fail("The data file is damaged.");
 	if (d.tasks.some((t) => !Array.isArray(t?.updates))) fail("The data file is damaged.");
+	if (d.tasks.some((t) => t.watch !== undefined && (typeof t.watch?.since !== "number" || !Number.isInteger(t.watch.checks)))) fail("The data file is damaged.");
 	if (!d.order || !Array.isArray(d.order.pinned) || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	return d;
 }
@@ -465,7 +496,13 @@ export function upgrade1to2(old: any): any {
 }
 
 /** Schema 2 → 3: tasks get progress notes (updates), none yet. */
-export function upgrade2to3(old: any): Data {
+export function upgrade2to3(old: any): any {
 	if (!old || old.schema !== 2 || !Array.isArray(old.tasks)) fail("Expected schema 2 data.");
-	return { ...old, schema: SCHEMA, nextUpdateId: 1, tasks: old.tasks.map((t: Task) => ({ ...t, updates: [] })) };
+	return { ...old, schema: 3, nextUpdateId: 1, tasks: old.tasks.map((t: Task) => ({ ...t, updates: [] })) };
+}
+
+/** Schema 3 → 4: tasks can be watched (state `watching`, `watch`); no task is yet. */
+export function upgrade3to4(old: any): Data {
+	if (!old || old.schema !== 3 || !Array.isArray(old.tasks)) fail("Expected schema 3 data.");
+	return { ...old, schema: SCHEMA };
 }
