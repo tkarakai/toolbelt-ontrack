@@ -6,7 +6,7 @@ import type { Context, PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
+import { attention, defaultSnooze, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, stillWaitingDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number };
 
@@ -90,7 +90,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	}
 
 	/** Returns true when the data changed. */
-	function onEvent(name: string, p: any, c: Context, before: Data): boolean {
+	function onEvent(surface: string, name: string, p: any, c: Context, before: Data): boolean {
 		const dialog = view.dialog;
 		const rowId = () => Number(String(p?.rowId ?? "").replace(/^[lr]/, ""));
 		const t = now();
@@ -127,7 +127,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			}
 			case "reorder": {
 				const id = Number(p?.rowId);
-				const watched = model.findTask(data, id).state === "watching";
+				const task = model.findTask(data, id);
+				const watched = task.state === "watching";
+				// Back into Watching after a check-in: confirm the next one, as Still waiting does.
+				if (p?.section === "watching" && task.watch && !watched && task.state !== "working") {
+					view.dialog = stillWaitingDialog(task, t);
+					return false;
+				}
 				life.drop(data, id, p?.section as life.SectionId, p?.before ? Number(p.before) : null, t);
 				if (p?.section === "watching" && !watched) offerUndo(c, `Watching ${name2(id)} · ${nextCheckIn(id)}`, before);
 				return true;
@@ -154,6 +160,9 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					if (p.field === "on") dialog.on = String(value);
 					if (p.field === "repeat") setRepeat(dialog, String(value), t);
 					if (p.field === "next") (dialog.next = String(value)), (dialog.nextSet = true);
+				} else if (dialog?.kind === "stillWaiting" && p?.form === "stillWaiting") {
+					if (p.field === "next") dialog.next = String(value);
+					if (p.field === "note") dialog.note = String(value);
 				} else if (dialog?.kind === "label" && p?.form === "label") {
 					const d = dialog.draft;
 					if (p.field === "name" || p.field === "values" || p.field === "color" || p.field === "shades") d[p.field as "name"] = String(value);
@@ -195,10 +204,18 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			case "edit-watch":
 				view.dialog = watchDialog(model.findTask(data, rowId()), t);
 				return false;
-			case "still-waiting":
-				life.stillWaiting(data, rowId(), t, typeof p?.text === "string" ? p.text : "");
-				offerUndo(c, `Still waiting on ${name2(rowId())} · ${nextCheckIn(rowId())}`, before);
-				return true;
+			case "still-waiting": {
+				// Always confirmed: the dialog proposes the next check-in. From the quick view it
+				// opens in the main window, on the task.
+				const task = model.findTask(data, rowId());
+				if (!task.watch) throw new InvalidInput("This task isn't watched.");
+				view.dialog = stillWaitingDialog(task, t);
+				if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
+					view.dialog = undefined;
+					throw new InvalidInput("Open OnTrack to confirm Still waiting.");
+				}
+				return false;
+			}
 			case "stop-watching":
 				life.stopWatching(data, rowId(), t);
 				return true;
@@ -319,6 +336,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 					const due = model.parseDue(dialog.until) ?? "";
 					if (!due) throw new InvalidInput("Choose when it should come back.");
 					life.snooze(data, dialog.id, model.dueAt(due.includes("T") ? due : `${due}T09:00`), t);
+				} else if (dialog.kind === "stillWaiting") {
+					const due = model.parseDue(dialog.next);
+					const next = due === undefined ? null : model.dueAt(due.includes("T") ? due : `${due}T09:00`);
+					life.stillWaiting(data, dialog.id, t, dialog.note, next);
+					view.dialog = undefined;
+					offerUndo(c, `Still waiting on ${name2(dialog.id)} · ${nextCheckIn(dialog.id)}`, before);
+					return true;
 				} else if (dialog.kind === "watch") {
 					const repeat = REPEATS.find((r) => r.id === dialog.repeat) ?? REPEATS[0]!;
 					let next: number | undefined;
@@ -380,13 +404,13 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			"screen:labels": () => settingsScreen(data, view, now()),
 			quick: () => quickView(data, now()),
 		},
-		onEvent(_surface, name, payload, c) {
+		onEvent(surface, name, payload, c) {
 			// Work on a copy so a rejected change leaves the data exactly as it was.
 			const before = structuredClone(data);
 			try {
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
-				if (onEvent(name, payload, c, before) || timed) {
+				if (onEvent(surface, name, payload, c, before) || timed) {
 					life.tick(data, now());
 					save(data);
 					badge(c);

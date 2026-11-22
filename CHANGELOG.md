@@ -2,7 +2,7 @@
 
 ## Unreleased
 - **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (K) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in their own collapsed section, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
-- At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Still waiting (K, also in the quick view) logs the check as an update and sends it back until the next one. Starting work, settling or Stop watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
+- At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Still waiting… (K, also in the quick view, which opens the window) asks you to confirm the next check-in, proposing the next date on the schedule, and takes an optional note. Pressed before a check-in has come, it says so and lets you keep the upcoming one. It logs the check as an update and sends the task back. Starting work, settling or Stop watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
 - Existing data is upgraded to schema 4; nothing else changes.
 
 ## 0.4.0 — 2026-11-15

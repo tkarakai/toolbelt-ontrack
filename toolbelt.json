@@ -29,7 +29,9 @@
       "ui.row-pane",
       "ui.composer"
     ],
-    "optional": []
+    "optional": [
+      "navigate"
+    ]
   },
   "data": {
     "schema": 4

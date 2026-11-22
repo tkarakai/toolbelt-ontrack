@@ -1,7 +1,7 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, duration, inSection, sectionOf, snoozeChoices, timeSpent, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { cadenceLabel, defaultCheck, duration, inSection, proposedCheck, sectionOf, snoozeChoices, timeSpent, upcomingCheck, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -9,6 +9,7 @@ export type Dialog =
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
 	| WatchDialog
+	| StillWaitingDialog
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
@@ -60,6 +61,31 @@ export function watchDialog(task: Task, now: number): WatchDialog {
 	const upcoming = w?.next !== undefined && w.next > now ? w.next : undefined;
 	const next = upcoming ?? defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every);
 	return { kind: "watch", id: task.id, on: w?.on ?? "", repeat, next: toLocalInput(next), ...(upcoming !== undefined && { nextSet: true }) };
+}
+
+/**
+ * Still waiting, confirmed: the next check-in (proposed from the schedule, "" for no reminders)
+ * and an optional note. `upcoming`: the check-in that hasn't come yet and would be moved.
+ */
+export type StillWaitingDialog = { kind: "stillWaiting"; id: number; next: string; note: string; proposed?: number; upcoming?: number; error?: string };
+
+export function stillWaitingDialog(task: Task, now: number): StillWaitingDialog {
+	const proposed = proposedCheck(task, now);
+	const upcoming = upcomingCheck(task, now);
+	return { kind: "stillWaiting", id: task.id, next: proposed === undefined ? "" : toLocalInput(proposed), note: "", ...(proposed !== undefined && { proposed }), ...(upcoming !== undefined && { upcoming }) };
+}
+
+/** Check-in quick picks: tomorrow, in 3 days, a week, 2 weeks, a month (each at 9:00). */
+function checkPresets(now: number) {
+	const d = new Date(now);
+	const day = (days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 9, 0).getTime();
+	return [
+		{ label: "Tomorrow 9:00", value: toLocalInput(day(1)) },
+		{ label: "In 3 days", value: toLocalInput(day(3)) },
+		{ label: "In a week", value: toLocalInput(day(7)) },
+		{ label: "In 2 weeks", value: toLocalInput(day(14)) },
+		{ label: "In a month", value: toLocalInput(defaultCheck(now, { n: 1, unit: "month" })) },
+	];
 }
 
 /** A new repeat choice; the next check-in follows it unless the person picked one. */
@@ -169,7 +195,7 @@ export function taskActions(now: number): Action[] {
 			group: "flow",
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
-		{ id: "still-waiting", label: "Still waiting", icon: "hourglass", key: "k", inline: true, group: "flow" },
+		{ id: "still-waiting", label: "Still waiting…", icon: "hourglass", key: "k", inline: true, group: "flow" },
 		{ id: "watch", label: "Watch…", icon: "eye", key: "k", group: "flow" },
 		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "shift+k", group: "flow" },
 		{ id: "stop-watching", label: "Stop watching", icon: "eye-off", group: "flow" },
@@ -454,7 +480,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog &&["task", "relate", "snooze", "watch", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
+		dialog: view.dialog &&["task", "relate", "snooze", "watch", "stillWaiting", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
@@ -671,15 +697,7 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 		case "watch": {
 			const repeat = REPEATS.find((r) => r.id === dialog.repeat);
 			const known = [...new Set(data.tasks.map((t) => t.watch?.on).filter((v): v is string => !!v))].sort((a, b) => a.localeCompare(b));
-			const d = new Date(now);
-			const day = (days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 9, 0).getTime();
-			const presets = [
-				{ label: "Tomorrow 9:00", value: toLocalInput(day(1)) },
-				{ label: "In 3 days", value: toLocalInput(day(3)) },
-				{ label: "In a week", value: toLocalInput(day(7)) },
-				{ label: "In 2 weeks", value: toLocalInput(day(14)) },
-				{ label: "In a month", value: toLocalInput(defaultCheck(now, { n: 1, unit: "month" })) },
-			];
+			const presets = checkPresets(now);
 			return {
 				id: "watch",
 				title: `Watch ${taskName(data, dialog.id)}`,
@@ -714,6 +732,46 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 											description: repeat?.every ? `Then ${cadenceLabel(repeat.every).toLowerCase()}, on the same day and time. A date alone means 9:00.` : "A date alone means 9:00 that day.",
 										},
 									]),
+						],
+					},
+				],
+			};
+		}
+		case "stillWaiting": {
+			const task = data.tasks.find((t) => t.id === dialog.id);
+			const w = task?.watch;
+			const at = (ms: number) => stamp(ms, now);
+			const schedule = w?.every ? cadenceLabel(w.every).toLowerCase() : undefined;
+			const description = dialog.upcoming
+				? `The next check-in, ${at(dialog.upcoming)}, hasn't come yet. Keeping waiting moves it out${dialog.proposed ? ` to ${at(dialog.proposed)}` : ""}: confirm the date, or keep ${at(dialog.upcoming)}.`
+				: dialog.proposed
+					? `It comes back ${schedule ? `on its schedule (${schedule})` : "in a week"}: confirm the date or pick another.`
+					: "No reminders: pick a date if you want one.";
+			return {
+				id: "stillWaiting",
+				title: `Still waiting · ${taskName(data, dialog.id)}`,
+				description,
+				actions: [{ ...save, label: "Keep waiting", icon: "hourglass" }],
+				children: [
+					...error(dialog.error),
+					{
+						type: "form",
+						id: "stillWaiting",
+						fields: [
+							{
+								type: "datetime",
+								id: "next",
+								label: "Next check-in",
+								value: dialog.next,
+								placeholder: "No reminders",
+								presets: [
+									...(dialog.upcoming ? [{ label: `Keep ${at(dialog.upcoming)}`, value: toLocalInput(dialog.upcoming) }] : []),
+									...(dialog.proposed ? [{ label: schedule ? `On schedule · ${at(dialog.proposed)}` : `In a week · ${at(dialog.proposed)}`, value: toLocalInput(dialog.proposed) }] : []),
+									...checkPresets(now),
+								],
+								description: schedule ? `A date on the ${schedule} schedule keeps it; another date restarts it from there. ⌫ clears it: no reminders.` : "A date alone means 9:00. ⌫ clears it: no reminders.",
+							},
+							{ type: "textarea", id: "note", label: "Anything new?", value: dialog.note, markdown: true, rows: 3, placeholder: "Optional. Saved with the check in the updates." },
 						],
 					},
 				],
@@ -865,7 +923,7 @@ export function quickView(data: Data, now: number): Node {
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
-		stillWaiting: { id: "still-waiting", label: "Still waiting", icon: "hourglass", key: "k" },
+		stillWaiting: { id: "still-waiting", label: "Still waiting…", icon: "hourglass", key: "k" },
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};
 	const item = (t: Task) => {

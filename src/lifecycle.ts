@@ -351,16 +351,40 @@ export function watch(data: Data, id: number, input: WatchInput, now: number) {
 }
 
 /**
- * You checked, and it's still in someone else's hands: logged as an update (with your note, if
- * any), and back to Watching until the next check-in. A repeating watch keeps its schedule (a
- * check before the next one skips it); a one-off asks again in a week; no reminder stays so.
+ * The check-in Still waiting proposes: a repeating watch's next date on its schedule (checking
+ * before the upcoming check-in skips it), a week from today for a one-off, none without reminders.
  */
-export function stillWaiting(data: Data, id: number, now: number, note = "") {
+export function proposedCheck(task: Task, now: number): number | undefined {
+	const w = task.watch;
+	if (!w) return undefined;
+	if (w.every && w.anchor !== undefined) return nextCheck(w.anchor, w.every, Math.max(now, task.state === "watching" ? (w.next ?? now) : now));
+	return w.next !== undefined ? defaultCheck(now) : undefined;
+}
+
+/** The upcoming check-in of a task still in Watching, which a Still waiting now would move. */
+export const upcomingCheck = (task: Task, now: number) => (task.state === "watching" && task.watch?.next !== undefined && task.watch.next > now ? task.watch.next : undefined);
+
+/**
+ * You checked, and it's still in someone else's hands: logged as an update (with your note, if
+ * any), and back to Watching until `next`, the check-in you confirmed (`null`: no reminders;
+ * left out: `proposedCheck`). A date on the schedule keeps it; any other date restarts the
+ * schedule from there.
+ */
+export function stillWaiting(data: Data, id: number, now: number, note = "", next?: number | null) {
 	const task = findTask(data, id);
 	const w = task.watch ?? fail("This task isn't watched.");
 	if (task.state === "settled") fail("Un-settle it first.");
-	if (w.every && w.anchor !== undefined) w.next = nextCheck(w.anchor, w.every, Math.max(now, task.state === "watching" ? (w.next ?? now) : now));
-	else if (w.next !== undefined) w.anchor = w.next = defaultCheck(now);
+	const at = next === undefined ? proposedCheck(task, now) : next ?? undefined;
+	if (at !== undefined && at <= now) fail("Choose a check-in time in the future.");
+	if (at === undefined) {
+		delete w.next;
+		delete w.anchor;
+		delete w.every;
+	} else {
+		const onSchedule = w.every && w.anchor !== undefined && nextCheck(w.anchor, w.every, at - 1) === at;
+		if (!onSchedule) w.anchor = at;
+		w.next = at;
+	}
 	w.checked = now;
 	w.checks++;
 	const text = `Checked in: still waiting${w.on ? ` on ${w.on}` : ""}.`;

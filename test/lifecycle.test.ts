@@ -228,6 +228,27 @@ describe("watching", () => {
 		expect(t.unreadReason).toBe("Time to check in · waiting on Cobra team for 2 weeks · last checked 8 days ago · every week");
 	});
 
+	test("still waiting takes the confirmed date: on schedule keeps it, another restarts it, none ends reminders", () => {
+		const { d, ids } = setup();
+		const [a] = ids as [number];
+		life.watch(d, a, { every: life.WEEKLY, next: at(21) }, NOW);
+		const t = m.findTask(d, a);
+		// Before the check-in: it hasn't come yet, and the proposal is the one after.
+		expect(life.upcomingCheck(t, NOW)).toBe(at(21));
+		expect(life.proposedCheck(t, NOW)).toBe(at(28));
+		life.stillWaiting(d, a, NOW, "", at(28));
+		expect(t.watch).toMatchObject({ next: at(28), anchor: at(21) });
+		// Off schedule: weekly from the new date.
+		life.stillWaiting(d, a, NOW, "", at(25, 14));
+		expect(t.watch).toMatchObject({ next: at(25, 14), anchor: at(25, 14) });
+		expect(life.proposedCheck(t, NOW)).toBe(at(32, 14));
+		expect(() => life.stillWaiting(d, a, NOW, "", NOW - 1)).toThrow(m.InvalidInput);
+		life.stillWaiting(d, a, NOW, "", null);
+		expect(t.watch).toMatchObject({ checks: 3 });
+		expect([t.watch?.next, t.watch?.every, t.watch?.anchor]).toEqual([undefined, undefined, undefined]);
+		expect(life.proposedCheck(t, NOW)).toBeUndefined();
+	});
+
 	test("monthly check-ins keep their day, clamped at month ends", () => {
 		const month = { n: 1, unit: "month" } as const;
 		const jan31 = new Date(2027, 0, 31, 9, 0).getTime();

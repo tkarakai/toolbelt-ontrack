@@ -22,15 +22,15 @@ keeps room for a real agent later.
 - **Start working on this** (W) moves a task to Working, like sending an agent a message.
   **Done for now** (D) sends it back to the top of the Inbox, unread, like an agent finishing its
   turn. **Settle** (S), **Un-settle** (S), **Snooze** (Z, with 3 hours, this evening, tomorrow
-  9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Watch…** (K), **Still waiting**
-  (K), **Change watch…** (⇧K), **Stop watching**, **Pin/Unpin** (P), **Mark
+  9:00, next Monday 9:00 or a custom time), **Wake now** (W), **Watch…** (K), **Still
+  waiting…** (K), **Change watch…** (⇧K), **Stop watching**, **Pin/Unpin** (P), **Mark
   read/unread** (U), **Move up/down** (⌥↑/⌥↓), **Archive** (A), **Edit** (E), **Add update**
   (↵ or ⇧U), **Relate to…** (R) and **Delete** act on the selected task. Settle, snooze, watch,
   still waiting, unpin, archive and delete offer **Undo** for five seconds.
 - **Drag** tasks within Pinned, Inbox and Working to order them, or between sections: into Pinned
   pins, into Working starts work, Working → Inbox is Done for now, onto Settled settles, out of
   Snoozed wakes, out of Settled un-settles. Onto Watching watches weekly (a task that was already
-  watched gets Still waiting); out of Watching stops watching. Nothing drops into Snoozed, which
+  watched asks to confirm, as Still waiting does); out of Watching stops watching. Nothing drops into Snoozed, which
   needs a wake time.
 - **Unread** tasks are bold with a blue dot and say why: back from Working, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
@@ -43,7 +43,8 @@ keeps room for a real agent later.
 - The menu-bar **quick view** is a focus list: what you're working on (with elapsed time and its
   latest update), then Pinned and the Inbox in your order. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop work (W/D), add an update (U, then ↵),
-  snooze until tomorrow 9:00 (Z), settle (S) and, on a check-in, say you're still waiting (K). Enter opens the task in the main window. The
+  snooze until tomorrow 9:00 (Z), settle (S) and, on a check-in, say you're still waiting (K,
+  which opens the main window to confirm the next check-in). Enter opens the task in the main window. The
   plugin badge counts open tasks that are unread or overdue.
 
 ### Editing in the drawer
@@ -97,9 +98,13 @@ check-in in the When column. When a check-in comes due, the task goes back to th
 Inbox, unread, saying why: `Time to check in · waiting on Cobra team for 3 weeks · last checked 7
 days ago · every week`. It stays watched, marked with an eye. Then:
 
-- Nothing's changed: **Still waiting** (K) writes `Checked in: still waiting on Cobra team.` as an
-  update and sends it back to Watching until the next check-in on its schedule. A one-off watch
-  asks again in a week; checking before a check-in skips that one.
+- Nothing's changed: **Still waiting…** (K) asks you to confirm the next check-in. It proposes the
+  next date on the schedule (a week out for a one-off watch), offers quick picks, and takes an
+  optional note. Pressed before a check-in has come, it says so and proposes the one after,
+  with a quick pick to keep the upcoming one. A date on the schedule keeps it; another date
+  restarts it from there; clearing the date means no reminders. **Keep waiting** writes
+  `Checked in: still waiting on Cobra team.` (and your note) as an update and sends the task
+  back to Watching.
 - It's on you again: **Start** (W). Working on a task ends its watch.
 - It's finished: **Settle** (S). **Stop watching** turns it into an ordinary task.
 

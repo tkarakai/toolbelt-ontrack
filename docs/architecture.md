@@ -41,11 +41,19 @@ for narrow windows and for Change times…, which opens it on one update (`close
 The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from `REPEATS`,
 `next` as a local datetime and `nextSet`) opens from `watch`, `edit-watch` and the drawer's
 Status. Until the person picks `next`, changing `repeat` moves it to the default for that
-cadence. `still-waiting` (K) accepts an optional `text` note; it and saving the dialog offer Undo.
+cadence. Saving it offers Undo.
+
+`still-waiting` (K) always opens the Still waiting dialog (id `stillWaiting`, view state
+`StillWaitingDialog`: `next`, `note`, the `proposed` check-in from `proposedCheck` and the
+`upcoming` one from `upcomingCheck` when it hasn't come yet). From the quick view it also calls
+`navigate("tasks", {select})` (optional `navigate` capability) so the dialog shows in the main
+window; without it, a toast asks to open OnTrack. A drop into Watching of a task that's already
+watched opens the same dialog. Saving calls `stillWaiting` with the date (`null` when cleared)
+and offers Undo.
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
 `focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
-`still-waiting` (K, on watched tasks) and the lifecycle actions.
+`still-waiting` (K, on watched tasks; opens the main window) and the lifecycle actions.
 
 ## Code ownership
 
@@ -87,7 +95,8 @@ current schedule, the next check-in, the last Still waiting and how many there w
 `anchor` plus whole cadences on the local calendar (`addCadence`, month ends clamp), so the day
 and time never drift. No `next` means no reminders. A check-in moves the task to the Inbox but
 keeps `watch`, so Still waiting can send it back; `startWorking`, `settle` and `stopWatching`
-delete it.
+delete it. `stillWaiting` takes the confirmed date: one on the anchor's schedule keeps `anchor`,
+any other becomes the new `anchor`, and `null` removes `next`, `anchor` and `every`.
 
 The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks
 whose check-in came due to the top of the Inbox (unread, with `checkInReason`: who, how long, the
