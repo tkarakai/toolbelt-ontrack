@@ -143,7 +143,8 @@ describe("relations", () => {
 test("new tasks start in the Inbox, on top", () => {
 	const d = m.seed();
 	const [a, b] = [task(d, "a"), task(d, "b")];
-	expect([a.state, a.pinned, a.archived, a.unread, a.sessions]).toEqual(["inbox", false, false, false, []]);
+	expect([a.state, a.archived, a.unread, a.sessions]).toEqual(["inbox", false, false, []]);
+	expect("pinned" in a).toBe(false);
 	expect(d.order.inbox).toEqual([b.id, a.id]);
 	m.deleteTask(d, a.id, NOW);
 	expect(d.order.inbox).toEqual([b.id]);
@@ -162,9 +163,30 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	expect(() => m.upgrade1to2(d)).toThrow(m.InvalidInput);
 	const three = m.upgrade2to3(d);
 	expect(three).toMatchObject({ schema: 3, nextUpdateId: 1 });
-	expect(three.tasks.map((t) => t.updates)).toEqual([[], []]);
-	expect(m.parseData(JSON.parse(JSON.stringify(three)))).toEqual(JSON.parse(JSON.stringify(three)));
+	expect(three.tasks.map((t: m.Task) => t.updates)).toEqual([[], []]);
 	expect(() => m.upgrade2to3(three)).toThrow(m.InvalidInput);
+	const four = m.upgrade3to4(three);
+	expect(four.schema).toBe(4);
+	expect(m.parseData(JSON.parse(JSON.stringify(four)))).toEqual(JSON.parse(JSON.stringify(four)));
+	expect(() => m.upgrade3to4(four)).toThrow(m.InvalidInput);
+	expect(four.order).toEqual({ inbox: [1], working: [] });
+	expect(four.tasks.some((t) => "pinned" in t)).toBe(false);
+	expect(four.labels).toEqual(three.labels); // nothing was pinned, so no label
+	// Pins become a yes/no label, reusing one named Pinned when it's yes/no.
+	const pinnedThree = { ...three, order: { ...three.order, pinned: [2] }, tasks: three.tasks.map((t: any) => ({ ...t, pinned: t.id === 2 })) };
+	const withPins = m.upgrade3to4(pinnedThree);
+	const label = withPins.labels.at(-1)!;
+	expect(label).toMatchObject({ id: three.nextLabelId, name: "Pinned", type: "bool" });
+	expect(withPins.nextLabelId).toBe(three.nextLabelId + 1);
+	expect(withPins.tasks.map((t) => t.labels[label.id] === true)).toEqual([false, true]);
+	const taken = { ...pinnedThree, labels: [...three.labels, { id: 99, name: "pinned", type: "string", color: "red", values: [], freeform: true }] };
+	expect(m.upgrade3to4(taken).labels.at(-1)!.name).toBe("Pinned 2");
+	const reuse = { ...pinnedThree, labels: [...three.labels, { id: 99, name: "Pinned", type: "bool", color: "red", values: [], freeform: false }] };
+	expect(m.upgrade3to4(reuse).tasks[1]!.labels[99]).toBe(true);
+	// A damaged watch fails loudly.
+	const bad = JSON.parse(JSON.stringify(four));
+	bad.tasks[0].watch = { since: "yesterday" };
+	expect(() => m.parseData(bad)).toThrow(m.InvalidInput);
 });
 
 describe("updates", () => {

@@ -1,13 +1,14 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { inSection, sectionOf, snoozeChoices, timeSpent, workingSince, type SectionId } from "./lifecycle";
-import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update } from "./model";
+import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
+	| WatchDialog
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
@@ -27,6 +28,63 @@ export type View = {
 	show: "active" | "archived";
 	dialog?: Dialog;
 };
+
+/**
+ * The Watch dialog's fields as shown: who it waits on, a `repeat` choice (see `REPEATS`) and the
+ * next check-in as a local datetime. `nextSet`: the person picked the date, so changing the
+ * repeat no longer moves it.
+ */
+export type WatchDialog = { kind: "watch"; id: number; on: string; repeat: string; next: string; nextSet?: boolean; note: string; checkIn?: boolean; error?: string };
+
+/** How often to check in, as the Watch dialog offers it. `once` and `none` have no cadence. */
+export const REPEATS: { id: string; label: string; every?: Cadence }[] = [
+	{ id: "week", label: "Every week", every: WEEKLY },
+	{ id: "2weeks", label: "Every 2 weeks", every: { n: 2, unit: "week" } },
+	{ id: "month", label: "Every month", every: { n: 1, unit: "month" } },
+	{ id: "3months", label: "Every 3 months", every: { n: 3, unit: "month" } },
+	{ id: "day", label: "Every day", every: { n: 1, unit: "day" } },
+	{ id: "once", label: "Once" },
+	{ id: "none", label: "No reminders: I'll look myself" },
+];
+
+const repeatOf = (w: Watch | undefined) => {
+	if (!w) return "week";
+	if (!w.every) return w.next === undefined ? "none" : "once";
+	return REPEATS.find((r) => r.every?.n === w.every!.n && r.every.unit === w.every!.unit)?.id ?? "week";
+};
+
+/**
+ * The Watch dialog for a task: a new watch (weekly, a week from today at 9:00), the watch of a
+ * task in Watching, or (`checkIn`) a task a check-in brought back: watching it again proposes
+ * the next date on its schedule and takes a note for the check.
+ */
+export function watchDialog(task: Task, now: number): WatchDialog {
+	const w = task.watch;
+	const repeat = repeatOf(w);
+	const checkIn = !!w && task.state !== "watching";
+	const upcoming = !checkIn && w?.next !== undefined && w.next > now ? w.next : undefined;
+	const next = upcoming ?? (checkIn ? nextOnSchedule(task, now) : undefined) ?? defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every);
+	return { kind: "watch", id: task.id, on: w?.on ?? "", repeat, next: toLocalInput(next), note: "", ...(upcoming !== undefined && { nextSet: true }), ...(checkIn && { checkIn }) };
+}
+
+/** Check-in quick picks: tomorrow, in 3 days, a week, 2 weeks, a month (each at 9:00). */
+function checkPresets(now: number) {
+	const d = new Date(now);
+	const day = (days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 9, 0).getTime();
+	return [
+		{ label: "Tomorrow 9:00", value: toLocalInput(day(1)) },
+		{ label: "In 3 days", value: toLocalInput(day(3)) },
+		{ label: "In a week", value: toLocalInput(day(7)) },
+		{ label: "In 2 weeks", value: toLocalInput(day(14)) },
+		{ label: "In a month", value: toLocalInput(defaultCheck(now, { n: 1, unit: "month" })) },
+	];
+}
+
+/** A new repeat choice; the next check-in follows it unless the person picked one. */
+export function setRepeat(dialog: WatchDialog, repeat: string, now: number) {
+	dialog.repeat = repeat;
+	if (!dialog.nextSet) dialog.next = toLocalInput(defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every));
+}
 
 export const initialView = (): View => ({ query: "", filters: {}, show: "active" });
 
@@ -108,18 +166,24 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 		const value = task.labels[id.slice("label:".length)];
 		if (value === undefined || !values.includes(optionValue(value))) return false;
 	}
-	return s.test([`#${task.id}`, task.name, task.desc, ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
+	return s.test([`#${task.id}`, task.name, task.desc, task.watch?.on ?? "", ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
 }
 
 // ── actions ─────────────────────────────────────────────────────────────
 
-/** Every task action; each row offers the ones that fit its state. */
+/**
+ * Every task action; each row offers the ones that fit its state (`actionsFor`). The state
+ * machine: P starts work from the Inbox and brings a task back to the Inbox from anywhere else;
+ * Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there. A archives,
+ * E edits, R relates, U marks read.
+ */
 export function taskActions(now: number): Action[] {
 	return [
-		{ id: "start", label: "Start working on this", icon: "play", key: "w", inline: true, group: "flow" },
-		{ id: "done", label: "Done for now", icon: "inbox", key: "d", inline: true, group: "flow" },
-		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "w", inline: true, group: "flow" },
-		{ id: "unsettle", label: "Un-settle", icon: "rotate-ccw", key: "s", inline: true, group: "flow" },
+		{ id: "work", label: "Start working on it", icon: "play", key: "p", inline: true, group: "flow" },
+		{ id: "done", label: "Done for now", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "wake", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "unwatch", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "reopen", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
 		{
 			id: "snooze",
@@ -129,8 +193,7 @@ export function taskActions(now: number): Action[] {
 			group: "flow",
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
-		{ id: "pin", label: "Pin", icon: "pin", key: "p", group: "flow" },
-		{ id: "unpin", label: "Unpin", icon: "pin-off", key: "p", group: "flow" },
+		{ id: "watch", label: "Watch…", icon: "eye", key: "w", group: "flow" },
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
@@ -147,32 +210,67 @@ export function taskActions(now: number): Action[] {
 }
 
 /** The action ids a task offers, from its state. */
+/** The action that moves a task into each state (into the Inbox, by where it comes from). */
+const MOVE: Record<Exclude<Task["state"], "inbox">, string> = { working: "work", snoozed: "snooze", watching: "watch", settled: "settle" };
+const BACK: Record<Exclude<Task["state"], "inbox">, string> = { working: "done", snoozed: "wake", watching: "unwatch", settled: "reopen" };
+
+/** The action id that makes `task` move to `to` (which `TRANSITIONS` must allow). */
+export const actionFor = (task: Task, to: Task["state"]) => (to === "inbox" ? BACK[task.state as Exclude<Task["state"], "inbox">] : MOVE[to]);
+
+/** The action ids a task offers: its moves from `TRANSITIONS` (P, Z, W, S), then the rest. */
 export function actionsFor(data: Data, task: Task): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
-	const ids: string[] = [];
-	if (task.state === "inbox") ids.push("start");
-	if (task.state === "working") ids.push("done");
-	if (task.state === "snoozed") ids.push("wake");
-	if (task.state === "settled") ids.push("unsettle");
-	else ids.push("settle", "snooze", task.pinned ? "unpin" : "pin");
+	const ids = TRANSITIONS[task.state].map((to) => actionFor(task, to));
 	ids.push("edit", "add-update", "relate");
 	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
-	if (section === "pinned" || section === "inbox" || section === "working") ids.push("up", "down");
+	if (section === "inbox" || section === "working") ids.push("up", "down");
 	ids.push("archive", "delete");
 	return ids;
 }
 
 // ── tasks screen ────────────────────────────────────────────────────────
 
+/**
+ * OnTrack's own icon per state and group (`assets/state-*.svg`, the Hairline set: thin, quiet
+ * strokes), used wherever a state shows: section and group headers, drop
+ * targets, the When column, the watch mark and the quick view. Actions keep lucide icons.
+ */
+export const STATE_ICONS = {
+	inbox: asset("state-inbox"),
+	progressing: asset("state-progressing"),
+	working: asset("state-working"),
+	snoozed: asset("state-snoozed"),
+	watching: asset("state-watching"),
+	settled: asset("state-settled"),
+};
+
+/**
+ * The table's top-level sections. Progressing (id `working`) has no tasks of its own: its tasks
+ * show in three groups inside it (`SUBGROUPS`), Working, Snoozed and Watching, everything still
+ * in motion.
+ */
 export const SECTIONS: (Section & { id: SectionId })[] = [
-	{ id: "pinned", label: "Pinned", icon: "pin", empty: "Pin tasks to keep them on top", dropLabel: "Pin", dropIcon: "pin" },
-	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
-	{ id: "working", label: "Working", icon: "play", empty: "Not working on anything", dropLabel: "Start working", dropIcon: "play" },
-	{ id: "snoozed", label: "Snoozed", icon: "alarm-clock", empty: "Nothing snoozed", order: false },
-	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
+	{ id: "inbox", label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
+	{ id: "working", label: "Progressing", icon: STATE_ICONS.progressing, empty: "Nothing in progress", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+	{ id: "settled", label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
 ];
+
+/** The groups inside Progressing, one per state, in the order they show. */
+export const SUBGROUPS = {
+	working: { id: "working", label: "Working on it", icon: STATE_ICONS.working },
+	snoozed: { id: "snoozed", label: "Snoozed", icon: STATE_ICONS.snoozed },
+	watching: { id: "watching", label: "Watching", icon: STATE_ICONS.watching },
+};
+
+/** Every section's tasks in table order (a nested group shows where its first task is). */
+const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
+
+/** A row's group: its section, or Progressing and the group for its state inside it. */
+function rowGroup(section: SectionId) {
+	return section === "working" || section === "snoozed" || section === "watching" ? ["working", SUBGROUPS[section]] : section;
+}
 
 function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
@@ -180,28 +278,46 @@ function dueCell(task: Task, now: number): Cell {
 	return { text: friendlyDue(task.due, now), tone: overdue ? "danger" : undefined, icon: overdue ? "alarm-clock" : undefined };
 }
 
+/** "Waiting on Cobra team · 3 weeks · every week · checked 2×": a watched task's second line. */
+export function watchLine(w: Watch, now: number) {
+	return [
+		w.on ? `Waiting on ${w.on}` : "Watching",
+		duration(now - w.since),
+		w.every ? cadenceLabel(w.every).toLowerCase() : w.next === undefined ? "no reminders" : undefined,
+		w.checks ? `checked ${w.checks}×` : undefined,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /** The moment that matters for the task's section. */
 function whenCell(task: Task): Cell {
-	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: "alarm-clock" };
-	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: "check" };
+	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: STATE_ICONS.watching } : { text: "No reminder", icon: STATE_ICONS.watching, tone: "muted" };
+	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: STATE_ICONS.snoozed };
+	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: STATE_ICONS.settled };
 	const since = workingSince(task);
-	if (since) return { text: "", at: since, icon: "play" };
+	if (since) return { text: "", at: since, icon: STATE_ICONS.working };
 	return { text: "", at: task.updated };
 }
 
+/** A task's row in its section; a task brought back by a check-in carries an eye mark. */
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
+	const marks = [
+		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
+	];
+	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
 		id: String(task.id),
-		group: task.archived ? undefined : sectionOf(task),
+		group: task.archived ? undefined : rowGroup(sectionOf(task)),
 		unread: task.unread || undefined,
 		// The first cell titles the details drawer.
 		cells: {
 			name: {
 				text: task.name,
 				tags: tags(data, task),
-				sub: task.unread && task.unreadReason ? task.unreadReason : snippet(task.desc),
-				marks: task.pinned && task.state === "working" ? [{ icon: "play", tooltip: "Working on it", color: "sky" }] : undefined,
+				sub,
+				marks: marks.length ? marks : undefined,
 			},
 			id: { text: `#${task.id}`, mono: true },
 			due: dueCell(task, now),
@@ -219,20 +335,40 @@ function taskRow(data: Data, task: Task, now: number): Row {
 function statusOptions(task: Task, now: number) {
 	const since = workingSince(task);
 	const at = (ms: number) => stamp(ms, now);
-	return [
+	// Only the states `TRANSITIONS` allows from here, in list order, and the current one.
+	const reachable = (value: string) => value === task.state || TRANSITIONS[task.state].includes(value as Task["state"]);
+	return ([
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
+		{ value: "working", label: task.state === "working" && since ? `Working on it · since ${at(since)}` : "Working on it" },
 		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
+		{
+			value: "watching",
+			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
+		},
 		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
-	];
+	] satisfies { value: (typeof STATES)[number]; label: string }[]).filter((o) => reachable(o.value));
 }
 
-/** One quiet line of facts under the properties: id, pin, time spent, when it was made and changed. */
+/** A watched task's schedule, in full: who, since when, how often, next and last check. */
+function watchFacts(task: Task, now: number) {
+	const w = task.watch!;
+	const at = (ms: number) => stamp(ms, now);
+	return [
+		w.on ? `Waiting on ${w.on} since ${at(w.since)}` : `Watching since ${at(w.since)}`,
+		w.every ? cadenceLabel(w.every) : undefined,
+		task.state === "watching" ? (w.next !== undefined ? `next check-in ${at(w.next)}` : "no reminders") : "check-in due",
+		w.checked !== undefined ? `checked ${w.checks}×, last ${at(w.checked)}` : "not checked yet",
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+/** One quiet line of facts under the properties: id, time spent, when it was made and changed. */
 function factsLine(task: Task, now: number) {
 	const worked = timeSpent(task, now);
 	return [
 		`#${task.id}`,
-		task.archived ? "Archived" : task.pinned ? "Pinned" : undefined,
+		task.archived ? "Archived" : undefined,
 		worked ? `${spent(worked)} worked in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` : undefined,
 		`Created ${stamp(task.created, now)}`,
 		task.updated - task.created > 60_000 ? `changed ${stamp(task.updated, now)}` : undefined,
@@ -263,6 +399,7 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
 			],
 		},
+		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
 		{ type: "text", text: factsLine(task, now), tone: "muted" },
 		...(relations.length
 			? [
@@ -301,7 +438,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 	const s = search(view.query);
 	const archived = view.show === "archived";
 	const pool = data.tasks.filter((t) => t.archived === archived);
-	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : SECTIONS.flatMap((sec) => inSection(data, sec.id));
+	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : HOME_ORDER.flatMap((id) => inSection(data, id));
 	const shown = ordered.filter((t) => matches(data, view, t, s));
 	const filters: Filter[] = data.labels.map((label) => {
 		const counts = new Map<string, number>();
@@ -317,11 +454,12 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 			selected: view.filters[`label:${label.id}`] ?? [],
 		};
 	});
-	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled");
+	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
+	const watching = data.tasks.filter((t) => !t.archived && t.state === "watching").length;
 	const unread = open.filter((t) => t.unread).length;
 	const summary = archived
 		? `${shown.length} archived`
-		: `${open.length} open${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
+		: `${open.length} open${watching ? ` · ${watching} watching` : ""}${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
 	return {
 		type: "page",
 		search: { placeholder: "Search tasks" },
@@ -335,7 +473,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				label: "Show",
 				value: view.show,
 				options: [
-					{ value: "active", label: "Tasks", icon: "list-checks" },
+					{ value: "active", label: "Ongoing", icon: "list-checks" },
 					{ value: "archived", label: "Archived", icon: "archive", tooltip: "Archived tasks, newest first" },
 				],
 			},
@@ -366,7 +504,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog && ["task", "relate", "snooze", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
+		dialog: view.dialog &&["task", "relate", "snooze", "watch", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
@@ -486,6 +624,12 @@ export const fieldValue = (value: unknown) => (value === NONE ? "" : value);
 const save: Action = { id: "save", label: "Save", primary: true };
 const error = (text?: string): Node[] => (text ? [{ type: "text", text, tone: "danger" }] : []);
 
+/** The Snooze dialog for a task: its current wake time while snoozed, else tomorrow at 9:00. */
+export function snoozeDialog(task: Task, now: number): Extract<Dialog, { kind: "snooze" }> {
+	const until = task.state === "snoozed" && task.snoozedUntil && task.snoozedUntil > now ? toLocalInput(task.snoozedUntil) : defaultSnooze(now);
+	return { kind: "snooze", id: task.id, until };
+}
+
 /** The default custom snooze: tomorrow at 9:00, local time. */
 export function defaultSnooze(now: number) {
 	const d = new Date(now);
@@ -575,6 +719,54 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 								presets: choices.map((c) => ({ label: c.label, value: toLocalInput(c.until) })),
 								description: "A date alone means 9:00 that day.",
 							},
+						],
+					},
+				],
+			};
+		}
+		case "watch": {
+			const repeat = REPEATS.find((r) => r.id === dialog.repeat);
+			const known = [...new Set(data.tasks.map((t) => t.watch?.on).filter((v): v is string => !!v))].sort((a, b) => a.localeCompare(b));
+			const presets = checkPresets(now);
+			return {
+				id: "watch",
+				title: dialog.checkIn ? `Check in · ${taskName(data, dialog.id)}` : `Watch ${taskName(data, dialog.id)}`,
+				description: dialog.checkIn
+					? "Still waiting? It goes back to Watching until the next check-in, proposed on its schedule. The check is logged as an update."
+					: "Out of your hands for now. At each check-in it comes back to the top of the Inbox, unread, saying why; W sends it back here, P keeps it in the Inbox.",
+				actions: [{ ...save, label: dialog.checkIn ? "Keep watching" : "Watch" }],
+				children: [
+					...error(dialog.error),
+					{
+						type: "form",
+						id: "watch",
+						fields: [
+							{
+								type: "combobox",
+								id: "on",
+								label: "Waiting on",
+								value: dialog.on,
+								freeform: true,
+								placeholder: "Who or what (optional)",
+								options: known.map((v) => ({ value: v, label: v })),
+							},
+							{ type: "select", id: "repeat", label: "Check in", value: dialog.repeat, options: REPEATS.map((r) => ({ value: r.id, label: r.label })) },
+							...(dialog.repeat === "none"
+								? []
+								: [
+										{
+											type: "datetime" as const,
+											id: "next",
+											label: dialog.checkIn ? "Next check-in" : repeat?.every ? "First check-in" : "Check in on",
+											value: dialog.next,
+											placeholder: "Pick when to check in",
+											presets,
+											description: repeat?.every ? `Then ${cadenceLabel(repeat.every).toLowerCase()}, on the same day and time. A date alone means 9:00.` : "A date alone means 9:00 that day.",
+										},
+									]),
+							...(dialog.checkIn
+								? [{ type: "textarea" as const, id: "note", label: "Anything new?", value: dialog.note, markdown: true, rows: 3, placeholder: "Optional. Saved with the check in the updates." }]
+								: []),
 						],
 					},
 				],
@@ -714,36 +906,36 @@ const latestUpdate = (t: Task) => {
 };
 
 /**
- * The menu-bar quick view: a line to jot a new task into the Inbox (N), then what you're working
- * on, Pinned and the Inbox in your order. Each task can be started, stopped, settled, snoozed
- * until tomorrow, or given an update (U) without opening the window; ↵ opens it there.
- * Unread tasks are bold; overdue ones get a red dot.
+ * The menu-bar quick view: a line to jot a new task into the Inbox (N), then the Inbox and what
+ * you're working on, in the table's order. Every task carries one icon, its state's (the table's
+ * section or group icon). Each task can be started, stopped, settled, snoozed or given an update
+ * (U) without opening the window; ↵ opens it there. Unread tasks are bold; overdue ones get a red dot.
  */
 export function quickView(data: Data, now: number): Node {
+	const waiting = inSection(data, "inbox");
 	const working = inSection(data, "working");
-	const pinnedWorking = inSection(data, "pinned").filter((t) => t.state === "working");
-	const waiting = [...inSection(data, "pinned").filter((t) => t.state !== "working"), ...inSection(data, "inbox")];
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
-		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
+		snooze: { id: "snooze", label: "Snooze…", icon: "alarm-clock", key: "z" },
+		watch: { id: "watch", label: "Watch…", icon: "eye", key: "w" },
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};
 	const item = (t: Task) => {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
-		const subtitle = since ? [`Working · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
+		const subtitle = since ?[`Working on it · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
-			icon: since ? "play" : t.pinned ? "pin" : undefined,
-			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
+			icon: since ? STATE_ICONS.working : STATE_ICONS.inbox,
+			dot: isOverdue(t, now) ? ("danger" as const) : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
-				? [{ id: "done", label: "Done for now", icon: "inbox", key: "d" }, later.update, later.settle]
-				: [{ id: "start", label: "Start working on this", icon: "play", key: "w" }, later.update, later.snooze, later.settle],
+				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.snooze, later.settle]
+				: [{ id: "work", label: "Start working on it", icon: "play", key: "p" }, ...(t.watch ? [later.watch] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {
@@ -754,8 +946,8 @@ export function quickView(data: Data, now: number): Node {
 			{
 				type: "list",
 				id: "focus",
-				items: [...pinnedWorking, ...working, ...waiting].slice(0, 15).map(item),
-				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: "inbox" },
+				items: [...waiting, ...working].slice(0, 15).map(item),
+				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: STATE_ICONS.inbox },
 			},
 		],
 	};

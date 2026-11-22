@@ -2,14 +2,14 @@
   "formatVersion": 1,
   "id": "ontrack",
   "name": "OnTrack",
-  "description": "Tasks you manage yourself: an Inbox, Working, Snoozed and Settled, with colored labels, due dates and related tasks.",
+  "description": "Tasks you manage yourself: an Inbox, Working, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
   "icon": "list-checks",
   "version": "0.4.0",
   "protocol": 1,
   "entry": "index.js",
   "repo": "tkarakai/toolbelt-ontrack",
   "requires": {
-    "host": ">=0.3.12",
+    "host": ">=0.3.13",
     "bun": ">=1.3.0",
     "platforms": [
       "portable"
@@ -27,12 +27,15 @@
       "ui.modifier-keys",
       "ui.timeline",
       "ui.row-pane",
-      "ui.composer"
+      "ui.composer",
+      "assets"
     ],
-    "optional": []
+    "optional": [
+      "navigate"
+    ]
   },
   "data": {
-    "schema": 3
+    "schema": 4
   },
   "migration": {
     "entry": "migrate.js"
@@ -52,5 +55,13 @@
       "shortcut": "s"
     }
   ],
+  "assets": {
+    "state-inbox": "assets/state-inbox.svg",
+    "state-progressing": "assets/state-progressing.svg",
+    "state-working": "assets/state-working.svg",
+    "state-snoozed": "assets/state-snoozed.svg",
+    "state-watching": "assets/state-watching.svg",
+    "state-settled": "assets/state-settled.svg"
+  },
   "quickView": true
 }

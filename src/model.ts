@@ -2,7 +2,7 @@
 // so every rule is testable on plain objects.
 import { HUES, type Hue } from "@toolbelt/sdk";
 
-export const SCHEMA = 3;
+export const SCHEMA = 4;
 
 export type LabelType = "string" | "bool";
 
@@ -39,9 +39,37 @@ export type Relation = { task: number; type: string };
 
 /**
  * Where a task is in its life, as in T3 Code's thread list: waiting in the Inbox, being worked on,
- * snoozed until a time, or settled (done). Pinning and archiving are separate flags on top.
+ * snoozed until a time, watched (out of your hands for now, checked on from time to time) or
+ * settled (done). Archiving is a separate flag on top.
  */
-export type TaskState = "inbox" | "working" | "snoozed" | "settled";
+export type TaskState = "inbox" | "working" | "snoozed" | "watching" | "settled";
+
+export type CadenceUnit = "day" | "week" | "month";
+export const CADENCE_UNITS: readonly CadenceUnit[] = ["day", "week", "month"];
+/** How often a watched task asks to be checked on: every `n` days, weeks or months. */
+export type Cadence = { n: number; unit: CadenceUnit };
+
+/**
+ * A task you keep an eye on: someone else has the ball, or it just needs checking now and then.
+ * It stays with the task while it's watched and after a check-in brings it back to the Inbox,
+ * so watching it again (W) is that check; starting work, settling or P in Watching ends it.
+ */
+export type Watch = {
+	/** Who or what it's waiting on ("Cobra team"). */
+	on?: string;
+	/** Epoch ms watching started. */
+	since: number;
+	/** Repeat; absent means one check-in (or none, without `next`). */
+	every?: Cadence;
+	/** The first check-in of the current schedule; repeats count from it, keeping its day and time. */
+	anchor?: number;
+	/** The next check-in (while watching), or the one that brought it back. Absent: no reminders. */
+	next?: number;
+	/** Epoch ms of the last check (watching it again after a check-in). */
+	checked?: number;
+	/** How many times it was checked on. */
+	checks: number;
+};
 
 /** A stretch of work on a task, by whoever worked on it ("me" now; an agent later). */
 export type Session = { start: number; end?: number; by: string };
@@ -67,8 +95,6 @@ export type Task = {
 	labels: Record<string, string | boolean>;
 	relations: Relation[];
 	state: TaskState;
-	/** Shown in Pinned (unless snoozed or settled); keeps its Inbox/Working position. */
-	pinned: boolean;
 	/** Hidden from the sections; found in the Archived view and by search. */
 	archived: boolean;
 	/** Something happened since the person last opened it; `unreadReason` says what. */
@@ -76,6 +102,8 @@ export type Task = {
 	unreadReason?: string;
 	/** Epoch ms the snooze ends (state `snoozed`). */
 	snoozedUntil?: number;
+	/** Watching it: who it's waiting on and when to check in. */
+	watch?: Watch;
 	/** Epoch ms it was settled (state `settled`). */
 	settledAt?: number;
 	/** The `due` value whose arrival was already announced, so it's announced once. */
@@ -86,7 +114,7 @@ export type Task = {
 };
 
 /** The person's order of the sections they arrange; ids not listed go last. */
-export type Order = { pinned: number[]; inbox: number[]; working: number[] };
+export type Order = { inbox: number[]; working: number[] };
 
 export type Data = {
 	schema: typeof SCHEMA;
@@ -126,7 +154,7 @@ export function seed(): Data {
 			{ id: "supersedes", name: "Supersedes", inverse: "Superseded by" },
 			{ id: "blocks", name: "Blocks", inverse: "Blocked by" },
 		],
-		order: { pinned: [], inbox: [], working: [] },
+		order: { inbox: [], working: [] },
 	};
 }
 
@@ -247,7 +275,6 @@ export function addTask(data: Data, input: TaskInput, now: number): Task {
 		relations: [],
 		...checked,
 		state: "inbox",
-		pinned: false,
 		archived: false,
 		unread: false,
 		sessions: [],
@@ -274,7 +301,7 @@ export function updateTask(data: Data, id: number, input: TaskInput, now: number
 export function deleteTask(data: Data, id: number, now: number) {
 	findTask(data, id);
 	data.tasks = data.tasks.filter((t) => t.id !== id);
-	for (const key of ["pinned", "inbox", "working"] as const) data.order[key] = data.order[key].filter((x) => x !== id);
+	for (const key of ["inbox", "working"] as const) data.order[key] = data.order[key].filter((x) => x !== id);
 	for (const task of data.tasks) {
 		const kept = task.relations.filter((r) => r.task !== id);
 		if (kept.length !== task.relations.length) {
@@ -440,7 +467,8 @@ export function parseData(value: unknown): Data {
 	if (!Array.isArray(d.tasks) || !Array.isArray(d.labels) || !Array.isArray(d.relationTypes)) fail("The data file is damaged.");
 	if (!Number.isInteger(d.nextTaskId) || !Number.isInteger(d.nextLabelId) || !Number.isInteger(d.nextUpdateId)) fail("The data file is damaged.");
 	if (d.tasks.some((t) => !Array.isArray(t?.updates))) fail("The data file is damaged.");
-	if (!d.order || !Array.isArray(d.order.pinned) || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
+	if (d.tasks.some((t) => t.watch !== undefined && (typeof t.watch?.since !== "number" || !Number.isInteger(t.watch.checks)))) fail("The data file is damaged.");
+	if (!d.order || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	return d;
 }
 
@@ -465,7 +493,32 @@ export function upgrade1to2(old: any): any {
 }
 
 /** Schema 2 → 3: tasks get progress notes (updates), none yet. */
-export function upgrade2to3(old: any): Data {
+export function upgrade2to3(old: any): any {
 	if (!old || old.schema !== 2 || !Array.isArray(old.tasks)) fail("Expected schema 2 data.");
-	return { ...old, schema: SCHEMA, nextUpdateId: 1, tasks: old.tasks.map((t: Task) => ({ ...t, updates: [] })) };
+	return { ...old, schema: 3, nextUpdateId: 1, tasks: old.tasks.map((t: Task) => ({ ...t, updates: [] })) };
+}
+
+/**
+ * Schema 3 → 4: tasks can be watched (state `watching`, `watch`; no task is yet), and pinning
+ * is gone. Pins become a yes/no label "Pinned" (made only when some task was pinned, or reused
+ * when a yes/no label of that name exists), so nothing is lost and it can be filtered by.
+ */
+export function upgrade3to4(old: any): Data {
+	if (!old || old.schema !== 3 || !Array.isArray(old.tasks)) fail("Expected schema 3 data.");
+	const { pinned: _order, ...order } = old.order ?? {};
+	let labels: Label[] = old.labels;
+	let nextLabelId: number = old.nextLabelId;
+	let label: Label | undefined;
+	if (old.tasks.some((t: any) => t.pinned)) {
+		const named = (name: string) => labels.find((l) => l.name.toLowerCase() === name.toLowerCase());
+		label = named("Pinned")?.type === "bool" ? named("Pinned") : undefined;
+		if (!label) {
+			let name = "Pinned";
+			for (let n = 2; named(name); n++) name = `Pinned ${n}`;
+			label = { id: nextLabelId++, name, type: "bool", color: "amber", values: [], freeform: false };
+			labels = [...labels, label];
+		}
+	}
+	const tasks = old.tasks.map(({ pinned, ...t }: any) => (pinned && label ? { ...t, labels: { ...t.labels, [label.id]: true } } : t));
+	return { ...old, schema: SCHEMA, nextLabelId, labels, tasks, order: { inbox: order.inbox ?? [], working: order.working ?? [] } };
 }
