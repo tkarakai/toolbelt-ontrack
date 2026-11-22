@@ -96,7 +96,7 @@ test("start working, done for now, unread until opened", async () => {
 	await event("start", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
-	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working · under a minute" });
+	expect(quickList().items[0]).toMatchObject({ id: "2", icon: "play", subtitle: "Working on it · under a minute" });
 	clock += 25 * 60_000;
 	await event("done", { rowId: "2" });
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
@@ -117,7 +117,7 @@ test("drag between sections performs the matching transition", async () => {
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
 	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
 	// Progressing has no tasks of its own: Working, Snoozed and Watching are groups inside it.
-	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working", icon: "play" }]);
+	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working on it", icon: "play" }]);
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
 	expect(toasts().at(-1)).toMatchObject({ text: "Choose Snooze to pick a wake time.", tone: "error" });
@@ -351,7 +351,7 @@ test("the drawer edits a task in place: name, status, due, labels, description, 
 	// Status moves it through its lifecycle; Snooze asks until when; Settled offers Undo.
 	await event("field", { form: "task", field: "state", value: "working", rowId: "1" });
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("working");
-	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working · since");
+	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working on it · since");
 	await event("field", { form: "task", field: "state", value: "snoozed", rowId: "1" });
 	expect(tree("screen:tasks").dialog.id).toBe("snooze");
 	await event("dialog-close", { dialog: "snooze" });
@@ -391,7 +391,7 @@ test("the quick view adds tasks and updates, and snoozes, without the window", a
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("snoozed");
 });
 
-test("watch a task, see it come back for its check-in with why, and keep waiting from the window or quick view", async () => {
+test("watch a task, see it come back for its check-in with why, and watch it again from the window or quick view", async () => {
 	// START is Sat Nov 14 2026, 12:00.
 	const { saved, event } = await start(fixture());
 	const nov = (day: number, hour = 9) => new Date(2026, 10, day, hour, 0).getTime();
@@ -420,29 +420,15 @@ test("watch a task, see it come back for its check-in with why, and keep waiting
 	expect(groupOf(row)).toBe("watching");
 	expect(row.cells.name.sub).toBe("Waiting on Cobra team · less than a day · every 2 weeks");
 	expect(row.cells.when).toMatchObject({ at: nov(20), icon: "eye" });
-	expect(row.actions).toEqual(expect.arrayContaining(["edit-watch", "stop-watching"]));
-	expect(row.actions).not.toContain("still-waiting");
+	// In Watching: P back to the Inbox, W change the watch, S settle. No snooze.
+	expect(row.actions.slice(0, 3)).toEqual(["stop-watching", "edit-watch", "settle"]);
 	expect(row.actions).not.toContain("snooze");
-
-	// Still waiting before the check-in came: the dialog says so and proposes the one after.
-	await event("still-waiting", { rowId: "1" });
+	// Changing the watch in Watching isn't a check: the same dialog, without a note.
+	await event("edit-watch", { rowId: "1" });
 	dialog = tree("screen:tasks").dialog;
-	expect(dialog.id).toBe("stillWaiting");
-	expect(dialog.description).toMatch(/^The next check-in, Nov 20.*9:00 AM, hasn't come yet\. Keeping waiting moves it out to Dec 4.*: confirm the date, or keep Nov 20/);
-	fields = dialog.children[0].fields;
-	expect(fields.map((f: any) => [f.id, f.value])).toEqual([["next", "2026-12-04T09:00"], ["note", ""]]);
-	expect(fields[0].presets.slice(0, 2).map((p: any) => p.value)).toEqual(["2026-11-20T09:00", "2026-12-04T09:00"]);
-	// Keep the upcoming one: only the check is logged.
-	await event("field", { form: "stillWaiting", field: "next", value: "2026-11-20T09:00" });
-	await event("field", { form: "stillWaiting", field: "note", value: "Portal says pending." });
-	await event("save", { dialog: "stillWaiting" });
-	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "watching", watch: { next: nov(20), anchor: nov(20), checks: 1 } });
-	expect(saved.at(-1)!.tasks[0]!.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.\n\nPortal says pending.");
-	await event("undo");
-	// Closing the dialog changes nothing.
-	await event("still-waiting", { rowId: "1" });
-	await event("dialog-close", { dialog: "stillWaiting" });
-	expect(saved.at(-1)!.tasks[0]!.watch!.checks).toBe(0);
+	expect(dialog.title).toBe("Watch #1 Write spec");
+	expect(dialog.children[0].fields.map((f: any) => f.id)).toEqual(["on", "repeat", "next"]);
+	await event("dialog-close", { dialog: "watch" });
 	expect(tree("screen:tasks").summary).toBe("2 open · 1 watching");
 	expect(paneNode("1", "task").fields[1].options.find((o: any) => o.value === "watching").label).toMatch(/^Watching · next check-in Nov 20/);
 
@@ -455,24 +441,26 @@ test("watch a task, see it come back for its check-in with why, and keep waiting
 	expect(row.cells.name.marks).toEqual([{ icon: "eye", tooltip: "Watching: waiting on Cobra team" }]);
 	expect(lastBadge()).toMatchObject({ value: 1 });
 	const item = quickList().items.find((i: any) => i.id === "1");
-	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "still-waiting", "add-update", "snooze:tomorrow", "settle"]);
+	expect(item.actions.map((a: any) => a.id)).toEqual(["start", "watch", "add-update", "snooze:tomorrow", "settle"]);
+	// Back in the Inbox: no stop-watching; W watches it again.
+	expect(row.actions.slice(0, 4)).toEqual(["start", "snooze", "watch", "settle"]);
 
-	// Still waiting from the quick view opens the main window on the task, with the dialog
-	// proposing the next date on schedule (Dec 4, two weeks on).
-	await event("still-waiting", { rowId: "1" }, "quick");
+	// W from the quick view opens the main window on the task: a check-in, proposing the next
+	// date on schedule (Dec 4, two weeks on), with a note.
+	await event("watch", { rowId: "1" }, "quick");
 	expect(host!.messages.filter((m: any) => m.type === "navigate").at(-1)).toMatchObject({ screen: "tasks", select: "1" });
-	expect(tree("screen:tasks").dialog.description).toBe("It comes back on its schedule (every 2 weeks): confirm the date or pick another.");
-	await event("save", { dialog: "stillWaiting" });
-	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "watching", unread: false, watch: { next: nov(34), checks: 1 } });
-	expect(saved.at(-1)!.tasks[0]!.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.");
-	expect(toasts().at(-1)).toMatchObject({ text: expect.stringMatching(/^Still waiting on #1 · next check-in /), action: { id: "undo" } });
-	await event("undo");
-	expect(rows().find((r) => r.id === "1").group).toBe("inbox");
+	dialog = tree("screen:tasks").dialog;
+	expect(dialog).toMatchObject({ title: "Check in · #1 Write spec", actions: [expect.objectContaining({ label: "Keep watching" })] });
+	expect(dialog.children[0].fields.map((f: any) => [f.id, f.value])).toEqual([["on", "Cobra team"], ["repeat", "2weeks"], ["next", "2026-12-04T09:00"], ["note", ""]]);
+	await event("field", { form: "watch", field: "note", value: "Portal says pending." });
+	await event("save", { dialog: "watch" });
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "watching", unread: false, watch: { next: nov(34), anchor: nov(20), checks: 1 } });
+	expect(saved.at(-1)!.tasks[0]!.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.\n\nPortal says pending.");
+	expect(toasts().at(-1)).toMatchObject({ text: expect.stringMatching(/^Still watching #1 · next check-in /), action: { id: "undo" } });
 
-	// Stop watching from the drawer's status: an ordinary task again.
-	await event("still-waiting", { rowId: "1" });
-	await event("save", { dialog: "stillWaiting" });
-	await event("field", { form: "task", field: "state", value: "inbox", rowId: "1" });
+	// P in Watching: back to the Inbox, an ordinary task again.
+	await event("stop-watching", { rowId: "1" });
+	expect(saved.at(-1)!.tasks[0]).toMatchObject({ state: "inbox" });
 	expect(saved.at(-1)!.tasks[0]!.watch).toBeUndefined();
 	expect(rows().find((r) => r.id === "1").group).toBe("inbox");
 	// The drawer's status opens the Watch dialog; a drag watches weekly.

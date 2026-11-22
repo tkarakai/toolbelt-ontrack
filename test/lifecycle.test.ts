@@ -190,42 +190,27 @@ describe("watching", () => {
 		expect(life.nextWake(d, at(21))).toBeUndefined();
 	});
 
-	test("still waiting logs an update and keeps the schedule's day and time", () => {
+	test("watching a task a check-in brought back logs the check and keeps the schedule's day and time", () => {
 		const { d, ids } = setup();
 		const [a] = ids as [number];
 		life.watch(d, a, { on: "Cobra team", every: life.WEEKLY, next: at(21) }, NOW);
 		life.tick(d, at(23, 15)); // seen two days late
-		life.stillWaiting(d, a, at(23, 15), "Emailed them again.");
 		const t = m.findTask(d, a);
-		expect(t).toMatchObject({ state: "watching", unread: false, watch: { next: at(28), checked: at(23, 15), checks: 1 } });
+		expect(life.nextOnSchedule(t, at(23, 15))).toBe(at(28));
+		life.watch(d, a, { on: "Cobra team", every: life.WEEKLY, next: at(28), note: "Emailed them again." }, at(23, 15));
+		expect(t).toMatchObject({ state: "watching", unread: false, watch: { next: at(28), anchor: at(21), since: NOW, checked: at(23, 15), checks: 1 } });
 		expect(t.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.\n\nEmailed them again.");
-		// Checking before the next check-in skips it.
-		life.stillWaiting(d, a, at(27));
-		expect(t.watch).toMatchObject({ next: at(35), checks: 2 });
-		expect(t.updates.at(-1)!.text).toBe("Checked in: still waiting on Cobra team.");
-		life.tick(d, at(35));
-		expect(t.unreadReason).toBe("Time to check in · waiting on Cobra team for 2 weeks · last checked 8 days ago · every week");
-	});
-
-	test("still waiting takes the confirmed date: on schedule keeps it, another restarts it, none ends reminders", () => {
-		const { d, ids } = setup();
-		const [a] = ids as [number];
-		life.watch(d, a, { every: life.WEEKLY, next: at(21) }, NOW);
-		const t = m.findTask(d, a);
-		// Before the check-in: it hasn't come yet, and the proposal is the one after.
-		expect(life.upcomingCheck(t, NOW)).toBe(at(21));
-		expect(life.proposedCheck(t, NOW)).toBe(at(28));
-		life.stillWaiting(d, a, NOW, "", at(28));
-		expect(t.watch).toMatchObject({ next: at(28), anchor: at(21) });
-		// Off schedule: weekly from the new date.
-		life.stillWaiting(d, a, NOW, "", at(25, 14));
-		expect(t.watch).toMatchObject({ next: at(25, 14), anchor: at(25, 14) });
-		expect(life.proposedCheck(t, NOW)).toBe(at(32, 14));
-		expect(() => life.stillWaiting(d, a, NOW, "", NOW - 1)).toThrow(m.InvalidInput);
-		life.stillWaiting(d, a, NOW, "", null);
-		expect(t.watch).toMatchObject({ checks: 3 });
-		expect([t.watch?.next, t.watch?.every, t.watch?.anchor]).toEqual([undefined, undefined, undefined]);
-		expect(life.proposedCheck(t, NOW)).toBeUndefined();
+		// Changing the watch while it's in Watching isn't a check.
+		life.watch(d, a, { on: "Cobra support", every: life.WEEKLY, next: at(28) }, at(24));
+		expect(t.watch).toMatchObject({ on: "Cobra support", checks: 1 });
+		expect(t.updates).toHaveLength(1);
+		// Off the schedule: weekly from the new date.
+		life.tick(d, at(28));
+		life.watch(d, a, { every: life.WEEKLY, next: at(30, 14) }, at(28, 10));
+		expect(t.watch).toMatchObject({ next: at(30, 14), anchor: at(30, 14), checks: 2 });
+		expect(t.updates.at(-1)!.text).toBe("Checked in: still waiting.");
+		life.tick(d, at(30, 14));
+		expect(t.unreadReason).toBe("Time to check in · watched for 2 weeks · last checked 2 days ago · every week");
 	});
 
 	test("monthly check-ins keep their day, clamped at month ends", () => {
@@ -237,22 +222,20 @@ describe("watching", () => {
 		expect(life.defaultCheck(NOW, month)).toBe(new Date(2026, 11, 14, 9, 0).getTime());
 	});
 
-	test("a one-off check-in asks again in a week; no reminders stays so", () => {
+	test("a one-off check-in proposes a week from then; no reminders proposes none", () => {
 		const { d, ids } = setup();
 		const [a, b] = ids as [number, number];
 		life.watch(d, a, { next: at(16) }, NOW);
 		life.tick(d, at(16));
-		life.stillWaiting(d, a, at(16, 10));
-		expect(m.findTask(d, a).watch).toMatchObject({ next: at(23), anchor: at(23) });
-		expect(m.findTask(d, a).watch?.every).toBeUndefined();
+		expect(life.nextOnSchedule(m.findTask(d, a), at(16, 10))).toBe(at(23));
 		life.watch(d, b, {}, NOW);
 		life.tick(d, NOW + 365 * D);
 		expect(m.findTask(d, b).state).toBe("watching");
-		life.stillWaiting(d, b, NOW + D);
-		expect(m.findTask(d, b).watch).toMatchObject({ checks: 1 });
-		expect(m.findTask(d, b).watch?.next).toBeUndefined();
+		expect(life.nextOnSchedule(m.findTask(d, b), NOW)).toBeUndefined();
+		// A task never watched proposes the default: a week from today at 9:00.
+		expect(life.nextOnSchedule(m.findTask(d, ids[2]!), NOW)).toBe(at(21));
 		// Watching sorts by next check-in, no reminders last.
-		life.stillWaiting(d, a, NOW + 365 * D);
+		life.watch(d, a, { next: at(23) }, at(16, 10));
 		expect(names(d, "watching")).toEqual(["a", "b"]);
 	});
 
@@ -262,7 +245,6 @@ describe("watching", () => {
 		expect(() => life.watch(d, a, { next: NOW - 1 }, NOW)).toThrow(m.InvalidInput);
 		expect(() => life.watch(d, a, { every: life.WEEKLY }, NOW)).toThrow(m.InvalidInput);
 		expect(() => life.watch(d, a, { every: { n: 0, unit: "week" }, next: at(21) }, NOW)).toThrow(m.InvalidInput);
-		expect(() => life.stillWaiting(d, a, NOW)).toThrow(m.InvalidInput);
 		expect(() => life.stopWatching(d, a, NOW)).toThrow(m.InvalidInput);
 		life.watch(d, a, {}, NOW);
 		expect(() => life.move(d, a, 1, NOW)).toThrow(m.InvalidInput);
@@ -272,19 +254,20 @@ describe("watching", () => {
 		const { d, ids } = setup();
 		const [a, b, c] = ids as [number, number, number];
 		for (const id of ids) life.watch(d, id, { on: "them", every: life.WEEKLY, next: at(21) }, NOW);
-		life.stillWaiting(d, a, NOW + H);
-		life.watch(d, a, { on: "someone else", next: at(18) }, NOW + 2 * H);
-		expect(m.findTask(d, a).watch).toMatchObject({ on: "someone else", since: NOW, checks: 1, checked: NOW + H, next: at(18) });
-		life.startWorking(d, a, NOW + 3 * H);
+		life.tick(d, at(21));
+		life.watch(d, a, { on: "someone else", next: at(25) }, at(21, 10));
+		expect(m.findTask(d, a).watch).toMatchObject({ on: "someone else", since: NOW, checks: 1, checked: at(21, 10), next: at(25) });
+		life.startWorking(d, a, at(21, 11));
 		expect(m.findTask(d, a).watch).toBeUndefined();
-		life.settle(d, b, NOW + 3 * H);
+		life.settle(d, b, at(21, 11));
 		expect(m.findTask(d, b).watch).toBeUndefined();
-		life.stopWatching(d, c, NOW + 3 * H);
+		life.watch(d, c, { on: "them", every: life.WEEKLY, next: at(28) }, at(21, 11));
+		life.stopWatching(d, c, at(21, 12));
 		expect(m.findTask(d, c)).toMatchObject({ state: "inbox", unread: false });
 		expect(m.findTask(d, c).watch).toBeUndefined();
 		expect(names(d, "inbox")[0]).toBe("c");
 		// From Settled: keep an eye on it after all.
-		life.watch(d, b, {}, NOW + 4 * H);
+		life.watch(d, b, {}, at(21, 13));
 		expect(m.findTask(d, b).state).toBe("watching");
 		expect(m.findTask(d, b).settledAt).toBeUndefined();
 	});
@@ -329,7 +312,7 @@ describe("watching", () => {
 		expect(() => life.drop(d, w1, "snoozed", null, NOW)).toThrow(m.InvalidInput);
 	});
 
-	test("drag into Watching watches weekly (or is Still waiting); out of it stops watching", () => {
+	test("drag into Watching watches weekly (or again on its schedule); out of it stops watching", () => {
 		const { d, ids } = setup();
 		const [a, b] = ids as [number, number];
 		life.drop(d, a, "watching", null, NOW);

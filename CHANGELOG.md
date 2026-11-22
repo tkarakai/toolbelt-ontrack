@@ -1,12 +1,13 @@
 # Changelog
 
 ## Unreleased
-- **Progressing** gathers everything still in motion in three groups: Working, Snoozed and Watching. No task sits directly under it.
-- **Simpler keys:** each place a task can go has one letter, and the same letter takes it back. P starts working and is Done for now on a task you're working on, S settles and un-settles, Z snoozes and wakes, W watches, A archives. D and the old Wake (W) key are gone.
+- **Progressing** gathers everything still in motion in three groups: Working on it, Snoozed and Watching. No task sits directly under it.
+- **One state machine for every task.** P starts work from the Inbox and brings a task back to the Inbox from anywhere else (Done for now, wake, stop watching, reopen). Z, W and S snooze, watch and settle, or change the snooze or watch when the task is already there. A archives. D and the old Wake (W) and Un-settle (S) keys are gone; the README has the full table.
+- Working is now called **Working on it**.
 - After you create a task, the list selects it.
 - **Pinned is gone.** Labels do the job: give tasks a yes/no label and filter by it. Tasks you had pinned get a yes/no **Pinned** label on upgrade, so you can still find them; delete the label if you don't need it.
 - **Watching**, for tasks that are out of your hands but not done, such as waiting on another party or something to check now and then. Watch… (W) asks who it's waiting on and how often to check in (every week by default, or every 2 weeks, month, 3 months, day, once, or no reminders). Watched tasks wait in a Watching group under Progressing, next check-in first, and read like “Waiting on Cobra team · 3 weeks · every week”.
-- At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Still waiting… (K, also in the quick view, which opens the window) asks you to confirm the next check-in, proposing the next date on the schedule, and takes an optional note. Pressed before a check-in has come, it says so and lets you keep the upcoming one. It logs the check as an update and sends the task back. Starting work, settling or Stop watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
+- At each check-in the task comes back to the top of the Inbox, unread, saying why: “Time to check in · waiting on Cobra team for 3 weeks · last checked 7 days ago · every week”. Watch it again (W, also in the quick view, which opens the window) to say you're still waiting: the dialog proposes the next date on the schedule and takes an optional note, logs the check as an update and sends the task back. Starting work, settling or P in Watching ends the watch. Watch from any section, Settled included, from the drawer's Status, or by dragging onto Watching (weekly).
 - Existing data is upgraded to schema 4.
 
 ## 0.4.0 — 2026-11-15

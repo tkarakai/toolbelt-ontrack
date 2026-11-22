@@ -217,7 +217,7 @@ export function dropSection(data: Data, section: SectionId, before: number | nul
  * A drag: into `section` before task `before`. Within a section it reorders; between sections
  * it's the matching transition (Start working, Done for now, Wake, Un-settle,
  * Settle, Watch, Stop watching). Snoozing needs a time, so nothing drops into Snoozed. Dropped
- * into Watching, a task that was already watched goes back with Still waiting; any other is
+ * into Watching, a task back from a check-in is watched again on its schedule; any other is
  * watched weekly, the default schedule.
  */
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
@@ -227,8 +227,9 @@ export function drop(data: Data, id: number, section: SectionId, before: number 
 	if (section === "settled") return from === "settled" ? undefined : settle(data, id, now);
 	if (section === "watching") {
 		if (from === "watching") return;
-		if (task.watch && task.state !== "working") return stillWaiting(data, id, now);
-		return watch(data, id, { on: task.watch?.on, every: WEEKLY, next: defaultCheck(now, WEEKLY) }, now);
+		// Back from a check-in: watched again on its schedule. Otherwise weekly, the default.
+		const w = task.watch;
+		return w ? watch(data, id, { on: w.on, every: w.every, next: nextOnSchedule(task, now) }, now) : watch(data, id, { every: WEEKLY, next: defaultCheck(now, WEEKLY) }, now);
 	}
 	if (from === section) {
 		place(data, section as keyof Order, id, before);
@@ -308,7 +309,7 @@ export function checkInReason(w: Watch, now: number) {
 		.join(" · ");
 }
 
-export type WatchInput = { on?: string; every?: Cadence; next?: number };
+export type WatchInput = { on?: string; every?: Cadence; next?: number; note?: string };
 
 function checkCadence(every: Cadence | undefined) {
 	if (every === undefined) return undefined;
@@ -318,8 +319,10 @@ function checkCadence(every: Cadence | undefined) {
 
 /**
  * Watch a task: out of your hands for now. With `next` it comes back to the Inbox then (and,
- * with `every`, on that schedule); without, only when you look. From Settled too ("keep an eye
- * on it after all"). Watching it again keeps when it started and how often it was checked.
+ * with `every`, on that schedule); without, only when you look. From any state (Settled too:
+ * "keep an eye on it after all"); in Watching it changes the watch. Watching a task a check-in
+ * brought back is that check: it's counted and logged as an update, with `note` if any, and it
+ * keeps when watching started.
  */
 export function watch(data: Data, id: number, input: WatchInput, now: number) {
 	const task = findTask(data, id);
@@ -331,61 +334,37 @@ export function watch(data: Data, id: number, input: WatchInput, now: number) {
 	if (task.state === "settled") delete task.settledAt;
 	delete task.snoozedUntil;
 	const was = task.watch;
-	const w: Watch = { since: was?.since ?? now, checks: was?.checks ?? 0 };
+	const checked = was !== undefined && task.state !== "watching";
+	const w: Watch = { since: was?.since ?? now, checks: (was?.checks ?? 0) + (checked ? 1 : 0) };
 	if (on) w.on = on;
 	if (every) w.every = every;
-	if (input.next !== undefined) w.anchor = w.next = input.next;
-	if (was?.checked !== undefined) w.checked = was.checked;
-	task.watch = w;
-	task.state = "watching";
-	markRead(task);
-	touch(task, now);
-}
-
-/**
- * The check-in Still waiting proposes: a repeating watch's next date on its schedule (checking
- * before the upcoming check-in skips it), a week from today for a one-off, none without reminders.
- */
-export function proposedCheck(task: Task, now: number): number | undefined {
-	const w = task.watch;
-	if (!w) return undefined;
-	if (w.every && w.anchor !== undefined) return nextCheck(w.anchor, w.every, Math.max(now, task.state === "watching" ? (w.next ?? now) : now));
-	return w.next !== undefined ? defaultCheck(now) : undefined;
-}
-
-/** The upcoming check-in of a task still in Watching, which a Still waiting now would move. */
-export const upcomingCheck = (task: Task, now: number) => (task.state === "watching" && task.watch?.next !== undefined && task.watch.next > now ? task.watch.next : undefined);
-
-/**
- * You checked, and it's still in someone else's hands: logged as an update (with your note, if
- * any), and back to Watching until `next`, the check-in you confirmed (`null`: no reminders;
- * left out: `proposedCheck`). A date on the schedule keeps it; any other date restarts the
- * schedule from there.
- */
-export function stillWaiting(data: Data, id: number, now: number, note = "", next?: number | null) {
-	const task = findTask(data, id);
-	const w = task.watch ?? fail("This task isn't watched.");
-	if (task.state === "settled") fail("Un-settle it first.");
-	const at = next === undefined ? proposedCheck(task, now) : next ?? undefined;
-	if (at !== undefined && at <= now) fail("Choose a check-in time in the future.");
-	if (at === undefined) {
-		delete w.next;
-		delete w.anchor;
-		delete w.every;
-	} else {
-		const onSchedule = w.every && w.anchor !== undefined && nextCheck(w.anchor, w.every, at - 1) === at;
-		if (!onSchedule) w.anchor = at;
-		w.next = at;
+	if (input.next !== undefined) {
+		// A date on the old schedule keeps its anchor, so the day and time never drift.
+		const same = every && was?.every && was.anchor !== undefined && was.every.n === every.n && was.every.unit === every.unit;
+		w.anchor = same && nextCheck(was!.anchor!, every!, input.next - 1) === input.next ? was!.anchor! : input.next;
+		w.next = input.next;
 	}
-	w.checked = now;
-	w.checks++;
-	const text = `Checked in: still waiting${w.on ? ` on ${w.on}` : ""}.`;
-	addUpdate(data, id, note.trim() ? `${text}\n\n${note.trim()}` : text, now);
-	endSession(task, now);
-	delete task.snoozedUntil;
+	if (checked) w.checked = now;
+	else if (was?.checked !== undefined) w.checked = was.checked;
+	task.watch = w;
+	if (checked) {
+		const text = `Checked in: still waiting${w.on ? ` on ${w.on}` : ""}.`;
+		const note = input.note?.trim();
+		addUpdate(data, id, note ? `${text}\n\n${note}` : text, now);
+	}
 	task.state = "watching";
 	markRead(task);
 	touch(task, now);
+}
+
+/**
+ * The check-in a watched task proposes when it's watched again: the next date on its schedule,
+ * a week from today for a one-off or a fresh watch, none when it had no reminders.
+ */
+export function nextOnSchedule(task: Task, now: number): number | undefined {
+	const w = task.watch;
+	if (w?.every && w.anchor !== undefined) return nextCheck(w.anchor, w.every, now);
+	return w && w.next === undefined ? undefined : defaultCheck(now);
 }
 
 /** No longer watched. A task in Watching goes to the top of the Inbox (or `before`), read. */

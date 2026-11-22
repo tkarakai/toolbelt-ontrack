@@ -16,7 +16,7 @@ plus the `quick` surface. Task row ids are the task id as a string on both the t
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
 The Tasks table declares `appearance: "document"`, `sections` (inbox, working titled
 Progressing, settled), `reorder` and `selectEvents`; New task has key N. Progressing has no rows
-of its own: Working, Snoozed and Watching rows use a group path inside it
+of its own: Working on it, Snoozed and Watching rows use a group path inside it
 (`["working", SUBGROUPS.snoozed]`), so they show as three groups, in that order. The host reports drops into those groups as `working`;
 `dropSection` tells them apart from `before` (before a group's first row ends the group above,
 `null` joins the last group shown). Saving a new task calls `navigate("tasks", {select})` so the
@@ -48,22 +48,22 @@ The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from
 Status. Until the person picks `next`, changing `repeat` moves it to the default for that
 cadence. Saving it offers Undo.
 
-Row keys: P start/done for now, S settle/un-settle, Z snooze/wake, W watch/change watch, ⇧W
-stop watching, K still waiting (only on a task a check-in brought back), A
-archive/unarchive, E edit, ⇧U add update, R relate, U read/unread. Paired actions share a key and
-never appear on the same row.
+Row keys follow the state machine in `actionsFor`: P is `start` in the Inbox and the way back
+to the Inbox elsewhere (`done`, `wake`, `stop-watching`, `unsettle`); Z `snooze` (also in
+Snoozed, to change the time; not in Watching or Settled); W `watch`, or `edit-watch` in Watching;
+S `settle` (not in Settled). A archive/unarchive, E edit, ⇧U add update, R relate, U read/unread.
+Actions sharing a key never appear on the same row.
 
-`still-waiting` (K) always opens the Still waiting dialog (id `stillWaiting`, view state
-`StillWaitingDialog`: `next`, `note`, the `proposed` check-in from `proposedCheck` and the
-`upcoming` one from `upcomingCheck` when it hasn't come yet). From the quick view it also calls
-`navigate("tasks", {select})` (optional `navigate` capability) so the dialog shows in the main
-window; without it, a toast asks to open OnTrack. A drop into Watching of a task that's already
-watched opens the same dialog. Saving calls `stillWaiting` with the date (`null` when cleared)
-and offers Undo.
+`watch` on a task a check-in brought back (it still has `watch` but isn't in Watching) opens the
+Watch dialog in check-in mode (`checkIn`): the next date from `nextOnSchedule` and a `note`.
+Saving calls `watch`, which counts the check and logs it as an update. From the quick view,
+`watch` also calls `navigate("tasks", {select})` (optional `navigate` capability) so the dialog
+shows in the main window. A drop into Watching of such a task opens the same dialog.
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
 `focus` list, whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
-`still-waiting` (K, on watched tasks; opens the main window) and the lifecycle actions.
+`watch` (W, on tasks back from a check-in; opens the main window), Z also on tasks being worked
+on, and the lifecycle actions.
 
 ## Code ownership
 
@@ -101,12 +101,12 @@ position.
 
 `watch` is `{on?, since, every?, anchor?, next?, checked?, checks}`: who it waits on, when watching
 started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first check-in of the
-current schedule, the next check-in, the last Still waiting and how many there were. Repeats are
+current schedule, the next check-in, the last check and how many there were. Repeats are
 `anchor` plus whole cadences on the local calendar (`addCadence`, month ends clamp), so the day
 and time never drift. No `next` means no reminders. A check-in moves the task to the Inbox but
-keeps `watch`, so Still waiting can send it back; `startWorking`, `settle` and `stopWatching`
-delete it. `stillWaiting` takes the confirmed date: one on the anchor's schedule keeps `anchor`,
-any other becomes the new `anchor`, and `null` removes `next`, `anchor` and `every`.
+keeps `watch`, so watching it again is that check (counted, logged as an update); `startWorking`, `settle` and `stopWatching`
+delete it. When `watch` gets a date on the old schedule (same cadence), it keeps `anchor`; any
+other date becomes the new `anchor`.
 
 The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks
 whose check-in came due to the top of the Inbox (unread, with `checkInReason`: who, how long, the
@@ -116,7 +116,7 @@ all its children are settled. Nothing settles automatically. In active mode a ti
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
 
 Each event works on a clone of the data; a rejected change (`InvalidInput`) restores it and shows
-the message in the open dialog or a toast. Settle, snooze, watch, still waiting, archive, delete and deleting an update keep
+the message in the open dialog or a toast. Settle, snooze, watch, archive, delete and deleting an update keep
 the previous data for five seconds behind the toast's Undo button. Successful changes are written
 before the event returns, so `prepare` is always ready. Migration upgrades schema 1 (tasks whose
 Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task

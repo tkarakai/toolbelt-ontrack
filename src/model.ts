@@ -52,7 +52,7 @@ export type Cadence = { n: number; unit: CadenceUnit };
 /**
  * A task you keep an eye on: someone else has the ball, or it just needs checking now and then.
  * It stays with the task while it's watched and after a check-in brings it back to the Inbox,
- * so Still waiting can send it back; starting work, settling or Stop watching ends it.
+ * so watching it again (W) is that check; starting work, settling or P in Watching ends it.
  */
 export type Watch = {
 	/** Who or what it's waiting on ("Cobra team"). */
@@ -65,7 +65,7 @@ export type Watch = {
 	anchor?: number;
 	/** The next check-in (while watching), or the one that brought it back. Absent: no reminders. */
 	next?: number;
-	/** Epoch ms of the last Still waiting. */
+	/** Epoch ms of the last check (watching it again after a check-in). */
 	checked?: number;
 	/** How many times it was checked on. */
 	checks: number;

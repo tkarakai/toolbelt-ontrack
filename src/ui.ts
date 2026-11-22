@@ -1,7 +1,7 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, duration, inSection, proposedCheck, sectionOf, snoozeChoices, timeSpent, upcomingCheck, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, timeSpent, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -9,7 +9,6 @@ export type Dialog =
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
 	| WatchDialog
-	| StillWaitingDialog
 	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
@@ -35,7 +34,7 @@ export type View = {
  * next check-in as a local datetime. `nextSet`: the person picked the date, so changing the
  * repeat no longer moves it.
  */
-export type WatchDialog = { kind: "watch"; id: number; on: string; repeat: string; next: string; nextSet?: boolean; error?: string };
+export type WatchDialog = { kind: "watch"; id: number; on: string; repeat: string; next: string; nextSet?: boolean; note: string; checkIn?: boolean; error?: string };
 
 /** How often to check in, as the Watch dialog offers it. `once` and `none` have no cadence. */
 export const REPEATS: { id: string; label: string; every?: Cadence }[] = [
@@ -54,25 +53,18 @@ const repeatOf = (w: Watch | undefined) => {
 	return REPEATS.find((r) => r.every?.n === w.every!.n && r.every.unit === w.every!.unit)?.id ?? "week";
 };
 
-/** The Watch dialog for a task: its current watch, or the default (weekly, a week from today at 9:00). */
+/**
+ * The Watch dialog for a task: a new watch (weekly, a week from today at 9:00), the watch of a
+ * task in Watching, or (`checkIn`) a task a check-in brought back: watching it again proposes
+ * the next date on its schedule and takes a note for the check.
+ */
 export function watchDialog(task: Task, now: number): WatchDialog {
 	const w = task.watch;
 	const repeat = repeatOf(w);
-	const upcoming = w?.next !== undefined && w.next > now ? w.next : undefined;
-	const next = upcoming ?? defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every);
-	return { kind: "watch", id: task.id, on: w?.on ?? "", repeat, next: toLocalInput(next), ...(upcoming !== undefined && { nextSet: true }) };
-}
-
-/**
- * Still waiting, confirmed: the next check-in (proposed from the schedule, "" for no reminders)
- * and an optional note. `upcoming`: the check-in that hasn't come yet and would be moved.
- */
-export type StillWaitingDialog = { kind: "stillWaiting"; id: number; next: string; note: string; proposed?: number; upcoming?: number; error?: string };
-
-export function stillWaitingDialog(task: Task, now: number): StillWaitingDialog {
-	const proposed = proposedCheck(task, now);
-	const upcoming = upcomingCheck(task, now);
-	return { kind: "stillWaiting", id: task.id, next: proposed === undefined ? "" : toLocalInput(proposed), note: "", ...(proposed !== undefined && { proposed }), ...(upcoming !== undefined && { upcoming }) };
+	const checkIn = !!w && task.state !== "watching";
+	const upcoming = !checkIn && w?.next !== undefined && w.next > now ? w.next : undefined;
+	const next = upcoming ?? (checkIn ? nextOnSchedule(task, now) : undefined) ?? defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every);
+	return { kind: "watch", id: task.id, on: w?.on ?? "", repeat, next: toLocalInput(next), note: "", ...(upcoming !== undefined && { nextSet: true }), ...(checkIn && { checkIn }) };
 }
 
 /** Check-in quick picks: tomorrow, in 3 days, a week, 2 weeks, a month (each at 9:00). */
@@ -180,16 +172,18 @@ function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search
 // ── actions ─────────────────────────────────────────────────────────────
 
 /**
- * Every task action; each row offers the ones that fit its state. One letter per place a task
- * can go, and the same letter brings it back: P Working, S Settled, Z Snoozed, W Watching
- * (K: still waiting, ⇧W: stop), A Archived. E edits, R relates, U marks read.
+ * Every task action; each row offers the ones that fit its state (`actionsFor`). The state
+ * machine: P starts work from the Inbox and brings a task back to the Inbox from anywhere else;
+ * Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there. A archives,
+ * E edits, R relates, U marks read.
  */
 export function taskActions(now: number): Action[] {
 	return [
-		{ id: "start", label: "Start working", icon: "play", key: "p", inline: true, group: "flow" },
+		{ id: "start", label: "Start working on it", icon: "play", key: "p", inline: true, group: "flow" },
 		{ id: "done", label: "Done for now", icon: "inbox", key: "p", inline: true, group: "flow" },
-		{ id: "wake", label: "Wake now", icon: "alarm-clock-off", key: "z", inline: true, group: "flow" },
-		{ id: "unsettle", label: "Un-settle", icon: "rotate-ccw", key: "s", inline: true, group: "flow" },
+		{ id: "wake", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "stop-watching", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "unsettle", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
 		{
 			id: "snooze",
@@ -199,10 +193,8 @@ export function taskActions(now: number): Action[] {
 			group: "flow",
 			menu: snoozeChoices(now).map((c) => ({ id: `snooze:${c.id}`, label: c.label, icon: "alarm-clock" })),
 		},
-		{ id: "still-waiting", label: "Still waiting…", icon: "hourglass", key: "k", inline: true, group: "flow" },
 		{ id: "watch", label: "Watch…", icon: "eye", key: "w", group: "flow" },
 		{ id: "edit-watch", label: "Change watch…", icon: "eye", key: "w", group: "flow" },
-		{ id: "stop-watching", label: "Stop watching", icon: "eye-off", key: "shift+w", group: "flow" },
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
@@ -223,19 +215,13 @@ export function taskActions(now: number): Action[] {
 export function actionsFor(data: Data, task: Task): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
-	const ids: string[] = [];
-	if (task.state === "inbox") ids.push("start");
-	if (task.state === "working") ids.push("done");
-	if (task.state === "snoozed") ids.push("wake");
-	// A check-in that came due (or one snoozed since); a task still in Watching isn't due yet.
-	if (task.watch && task.state !== "settled" && task.state !== "watching") ids.push("still-waiting");
-	if (task.state === "settled") ids.push("unsettle", "watch");
-	else {
-		ids.push("settle");
-		// Z wakes a snoozed task; snoozing it again goes through the drawer's Status.
-		if (task.state !== "watching" && task.state !== "snoozed") ids.push("snooze");
-		ids.push(...(task.watch ? ["edit-watch", "stop-watching"] : ["watch"]));
-	}
+	// The state machine: P starts work from the Inbox and brings a task back to it from anywhere
+	// else; Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there.
+	const back: Record<Task["state"], string> = { inbox: "start", working: "done", snoozed: "wake", watching: "stop-watching", settled: "unsettle" };
+	const ids: string[] = [back[task.state]];
+	if (task.state !== "watching" && task.state !== "settled") ids.push("snooze");
+	ids.push(task.state === "watching" ? "edit-watch" : "watch");
+	if (task.state !== "settled") ids.push("settle");
 	ids.push("edit", "add-update", "relate");
 	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
@@ -253,13 +239,13 @@ export function actionsFor(data: Data, task: Task): string[] {
  */
 export const SECTIONS: (Section & { id: SectionId })[] = [
 	{ id: "inbox", label: "Inbox", icon: "inbox", empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: "inbox" },
-	{ id: "working", label: "Progressing", icon: "activity", empty: "Nothing in progress", dropLabel: "Start working", dropIcon: "play" },
+{ id: "working", label: "Progressing", icon: "activity", empty: "Nothing in progress", dropLabel: "Start working on it", dropIcon: "play" },
 	{ id: "settled", label: "Settled", icon: "check", empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: "check" },
 ];
 
 /** The groups inside Progressing, one per state, in the order they show. */
 export const SUBGROUPS = {
-	working: { id: "working", label: "Working", icon: "play" },
+	working: { id: "working", label: "Working on it", icon: "play" },
 	snoozed: { id: "snoozed", label: "Snoozed", icon: "alarm-clock" },
 	watching: { id: "watching", label: "Watching", icon: "eye" },
 };
@@ -337,12 +323,12 @@ function statusOptions(task: Task, now: number) {
 	const at = (ms: number) => stamp(ms, now);
 	return [
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Working · since ${at(since)}` : "Working" },
+		{ value: "working", label: task.state === "working" && since ? `Working on it · since ${at(since)}` : "Working on it" },
+		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
 		{
 			value: "watching",
 			label: task.state === "watching" ? (task.watch?.next !== undefined ? `Watching · next check-in ${at(task.watch.next)}` : "Watching · no reminders") : "Watching…",
 		},
-		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
 		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
 	];
 }
@@ -502,7 +488,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},
 		],
-		dialog: view.dialog &&["task", "relate", "snooze", "watch", "stillWaiting", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
+		dialog: view.dialog &&["task", "relate", "snooze", "watch", "updates"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
 }
 
@@ -722,9 +708,11 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 			const presets = checkPresets(now);
 			return {
 				id: "watch",
-				title: `Watch ${taskName(data, dialog.id)}`,
-				description: "Out of your hands for now. At each check-in it comes back to the top of the Inbox, unread, saying why; Still waiting (K) sends it back here.",
-				actions: [{ ...save, label: "Watch" }],
+				title: dialog.checkIn ? `Check in · ${taskName(data, dialog.id)}` : `Watch ${taskName(data, dialog.id)}`,
+				description: dialog.checkIn
+					? "Still waiting? It goes back to Watching until the next check-in, proposed on its schedule. The check is logged as an update."
+					: "Out of your hands for now. At each check-in it comes back to the top of the Inbox, unread, saying why; W sends it back here, P keeps it in the Inbox.",
+				actions: [{ ...save, label: dialog.checkIn ? "Keep watching" : "Watch" }],
 				children: [
 					...error(dialog.error),
 					{
@@ -747,53 +735,16 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 										{
 											type: "datetime" as const,
 											id: "next",
-											label: repeat?.every ? "First check-in" : "Check in on",
+											label: dialog.checkIn ? "Next check-in" : repeat?.every ? "First check-in" : "Check in on",
 											value: dialog.next,
 											placeholder: "Pick when to check in",
 											presets,
 											description: repeat?.every ? `Then ${cadenceLabel(repeat.every).toLowerCase()}, on the same day and time. A date alone means 9:00.` : "A date alone means 9:00 that day.",
 										},
 									]),
-						],
-					},
-				],
-			};
-		}
-		case "stillWaiting": {
-			const task = data.tasks.find((t) => t.id === dialog.id);
-			const w = task?.watch;
-			const at = (ms: number) => stamp(ms, now);
-			const schedule = w?.every ? cadenceLabel(w.every).toLowerCase() : undefined;
-			const description = dialog.upcoming
-				? `The next check-in, ${at(dialog.upcoming)}, hasn't come yet. Keeping waiting moves it out${dialog.proposed ? ` to ${at(dialog.proposed)}` : ""}: confirm the date, or keep ${at(dialog.upcoming)}.`
-				: dialog.proposed
-					? `It comes back ${schedule ? `on its schedule (${schedule})` : "in a week"}: confirm the date or pick another.`
-					: "No reminders: pick a date if you want one.";
-			return {
-				id: "stillWaiting",
-				title: `Still waiting · ${taskName(data, dialog.id)}`,
-				description,
-				actions: [{ ...save, label: "Keep waiting", icon: "hourglass" }],
-				children: [
-					...error(dialog.error),
-					{
-						type: "form",
-						id: "stillWaiting",
-						fields: [
-							{
-								type: "datetime",
-								id: "next",
-								label: "Next check-in",
-								value: dialog.next,
-								placeholder: "No reminders",
-								presets: [
-									...(dialog.upcoming ? [{ label: `Keep ${at(dialog.upcoming)}`, value: toLocalInput(dialog.upcoming) }] : []),
-									...(dialog.proposed ? [{ label: schedule ? `On schedule · ${at(dialog.proposed)}` : `In a week · ${at(dialog.proposed)}`, value: toLocalInput(dialog.proposed) }] : []),
-									...checkPresets(now),
-								],
-								description: schedule ? `A date on the ${schedule} schedule keeps it; another date restarts it from there. ⌫ clears it: no reminders.` : "A date alone means 9:00. ⌫ clears it: no reminders.",
-							},
-							{ type: "textarea", id: "note", label: "Anything new?", value: dialog.note, markdown: true, rows: 3, placeholder: "Optional. Saved with the check in the updates." },
+							...(dialog.checkIn
+								? [{ type: "textarea" as const, id: "note", label: "Anything new?", value: dialog.note, markdown: true, rows: 3, placeholder: "Optional. Saved with the check in the updates." }]
+								: []),
 						],
 					},
 				],
@@ -944,25 +895,25 @@ export function quickView(data: Data, now: number): Node {
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze:tomorrow", label: "Snooze until tomorrow 9:00", icon: "alarm-clock", key: "z" },
-		stillWaiting: { id: "still-waiting", label: "Still waiting…", icon: "hourglass", key: "k" },
+		watch: { id: "watch", label: "Watch…", icon: "eye", key: "w" },
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};
 	const item = (t: Task) => {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
-		const subtitle = since ? [`Working · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
+		const subtitle = since ?[`Working on it · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
 			subtitle,
 			icon: since ? "play" : t.watch ? "eye" : undefined,
-			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const, pulse: true, label: "Working" } : undefined,
+			dot: isOverdue(t, now) ? ("danger" as const) : since ? { color: "sky" as const,pulse: true, label: "Working on it" } : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
-				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.settle]
-				: [{ id: "start", label: "Start working", icon: "play", key: "p" }, ...(t.watch ? [later.stillWaiting] : []), later.update, later.snooze, later.settle],
+				? [{ id: "done", label: "Done for now", icon: "inbox", key: "p" }, later.update, later.snooze, later.settle]
+				: [{ id: "start", label: "Start working on it", icon: "play", key: "p" }, ...(t.watch ? [later.watch] : []), later.update, later.snooze, later.settle],
 		};
 	};
 	return {
