@@ -103,6 +103,7 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	expect(row.cells.due.tone).toBe("danger");
 	expect(row.cells.name.dot).toEqual({ color: "danger", label: "Overdue" });
 	expect(row.cells.name.tone).toBe("danger");
+	expect(quickList().items.find((i: any) => i.id === "1")).toMatchObject({ dot: { color: "danger", label: "Overdue" }, titleStyle: { color: "danger" } });
 	// Overdue counts for the badge.
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 });

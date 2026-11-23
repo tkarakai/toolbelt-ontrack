@@ -27,7 +27,7 @@ Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-
 `ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer), `ui.composer`
 (update boxes, the quick view's New task line and its Add update prompt), `assets` (state
 icons), `ui.sub-sections` (Progressing) and `ui.toast-key` (⌘Z for Undo). The package is portable
-JavaScript, uses SDK 0.3.9 and needs Toolbelt 0.3.14 or newer.
+JavaScript, uses SDK 0.3.10 and needs Toolbelt 0.3.15 or newer.
 
 Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
 heading, status, due, labels, description), a facts line, a Related section and an Updates
@@ -76,7 +76,7 @@ shows in the main window. A drop into Watching of such a task opens the same dia
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
 `focus` list (Inbox, then Working on it, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
-its only `dot` marks overdue), whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
+its only `dot` and its red `titleStyle` mark overdue), whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
 `watch` (W, on tasks back from a check-in; opens the main window), Z also on tasks being worked
 on, and the lifecycle actions.
 

@@ -47,7 +47,8 @@ keeps room for a real agent later.
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
 - The menu-bar **quick view** is a focus list in the table's order: the Inbox, then what you're
-  working on (with elapsed time and its latest update). Each task shows one icon for its state. Without opening the window you can
+  working on (with elapsed time and its latest update). Each task shows one icon for its state;
+  unread tasks are bold with a blue dot, overdue ones have a red dot and a red title, as in the table. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop working (P), add an update (U, then ↵),
   settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
   their dialog in the main window, on the task. Enter opens the task in the main window. The
