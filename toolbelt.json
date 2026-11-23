@@ -4,7 +4,7 @@
   "name": "OnTrack",
   "description": "Tasks you manage yourself: an Inbox, Working, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
   "icon": "list-checks",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "protocol": 1,
   "entry": "index.js",
   "repo": "tkarakai/toolbelt-ontrack",

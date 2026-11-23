@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.7.0 — 2026-11-23
 - **Overdue tasks get a red dot and a red title**, in the table and the quick view; hovering the dot says “Overdue”. In the quick view every dot now sits before the title, the unread one first.
 - **A task reads after about two seconds open**, not right away, so passing over it on the way elsewhere keeps it unread.
 - Requires Toolbelt 0.3.15 (SDK 0.3.10).
