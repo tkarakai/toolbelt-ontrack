@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.6.0 — 2026-11-23
 - **Progressing's Working on it, Snoozed and Watching are real sub-sections**: headers like a section's, indented under Progressing, each showing even when empty (“Nothing snoozed”), collapsing on its own and remembering it. A drag lands in the sub-section it's dropped in; a drop on the Progressing header itself starts work. Progressing's open/closed state starts fresh once.
 - **⌘Z presses Undo** while its toast shows; in a text field ⌘Z still undoes your typing.
 - Requires Toolbelt 0.3.14 (SDK 0.3.9).
