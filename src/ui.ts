@@ -1,17 +1,57 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, PROGRESSING, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { colorOf, dueAt, nextValueColor, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
 	| WatchDialog
-	| { kind: "label"; id?: number; draft: Omit<LabelInput, "values" | "shades"> & { values: string; shades: string }; error?: string }
+	| { kind: "label"; id?: number; draft: LabelDraft; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
+
+/**
+ * A label being edited. Each value has a key for the list editor: `v:` and its text when the
+ * editor opened (kept in `from`, so a changed text is a rename), or `n:` and a number when added.
+ */
+export type LabelDraft = { name: string; type: LabelType; color: Hue; values: ValueDraft[]; freeform: boolean; valueColors: boolean; shades: string };
+export type ValueDraft = { key: string; text: string; color: Hue; from?: string };
+
+export function labelDraft(label?: Label): LabelDraft {
+	if (!label) return { name: "", type: "string", color: "blue", values: [], freeform: false, valueColors: false, shades: "" };
+	return {
+		name: label.name,
+		type: label.type,
+		color: label.color,
+		values: label.values.map((v) => ({ key: `v:${v.text}`, text: v.text, color: v.color, from: v.text })),
+		freeform: label.freeform,
+		valueColors: !!label.valueColors,
+		shades: label.shades ?? "",
+	};
+}
+
+/**
+ * The values list editor's new state applied to the draft: known keys keep where they came
+ * from; items without one are new and get a key, and a color when the editor gave none.
+ */
+export function applyValues(draft: LabelDraft, items: unknown, random?: () => number): void {
+	if (!Array.isArray(items)) return;
+	const known = new Map(draft.values.map((v) => [v.key, v]));
+	let n = Math.max(0, ...draft.values.map((v) => (v.key.startsWith("n:") ? Number(v.key.slice(2)) : 0)));
+	const values: ValueDraft[] = [];
+	for (const item of items as OptionItem[]) {
+		if (typeof item?.text !== "string") continue;
+		const was = item.key === undefined ? undefined : known.get(item.key);
+		const color = (HUES as readonly unknown[]).includes(item.color) ? item.color! : (was?.color ?? nextValueColor(values, random));
+		values.push({ key: was?.key ?? `n:${++n}`, text: item.text, color, ...(was?.from !== undefined && { from: was.from }) });
+	}
+	draft.values = values;
+}
+
+export const labelInput = (d: LabelDraft): LabelInput => ({ ...d, values: d.values.map(({ text, color, from }) => ({ text, color, from })) });
 
 /**
  * An update being edited in the Updates dialog: its text and times as the fields show them.
@@ -97,7 +137,7 @@ export function tags(data: Data, task: Task): Tag[] {
 	return data.labels.flatMap((label) => {
 		const value = task.labels[label.id];
 		if (value === undefined) return [];
-		return [{ text: value === true ? label.name : String(value), color: label.color, tooltip: value === true ? undefined : label.name, shade: shadeOf(label, value) }];
+		return [{ text: value === true ? label.name : String(value), color: colorOf(label, value), tooltip: value === true ? undefined : label.name, shade: shadeOf(label, value) }];
 	});
 }
 
@@ -121,13 +161,7 @@ export function spent(ms: number) {
 
 const optionValue = (value: string | boolean) => (value === true ? "yes" : String(value));
 
-/** A text label's listed values, then the other values tasks already use (sorted). */
-export function knownValues(data: Data, label: Label): string[] {
-	const used = data.tasks.map((t) => t.labels[label.id]).filter((v): v is string => typeof v === "string");
-	return [...new Set([...label.values, ...used.sort((a, b) => a.localeCompare(b))])];
-}
-
-const filterOptions = (data: Data, label: Label): string[] => (label.type === "bool" ? ["yes"] : knownValues(data, label));
+const filterOptions = (label: Label): string[] => (label.type === "bool" ? ["yes"] : label.values.map((v) => v.text));
 
 const taskName = (data: Data, id: number) => {
 	const task = data.tasks.find((t) => t.id === id);
@@ -454,7 +488,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 			id: `label:${label.id}`,
 			label: label.name,
 			icon: label.type === "bool" ? "toggle-left" : "tag",
-			options: filterOptions(data, label).map((value) => ({ value, label: label.type === "bool" ? "Yes" : value, dot: label.color, count: counts.get(value) ?? 0 })),
+			options: filterOptions(label).map((value) => ({ value, label: label.type === "bool" ? "Yes" : value, dot: label.type === "bool" ? label.color : colorOf(label, value), count: counts.get(value) ?? 0 })),
 			selected: view.filters[`label:${label.id}`] ?? [],
 		};
 	});
@@ -540,15 +574,11 @@ export function settingsScreen(data: Data, view: View, now: number): Node {
 						rows: data.labels.map((label) => ({
 							id: `l${label.id}`,
 							cells: {
-								name: { text: label.name, dot: label.color },
+								name: { text: label.name, dot: label.valueColors ? "rainbow" : label.color },
 								type: label.type === "bool" ? "Yes/no" : label.freeform ? "Free text" : "Lookup",
 								values: label.values.length
-									? {
-											text: "",
-											tags: label.values.map((v) => ({ text: v, color: label.color, shade: shadeOf(label, v) })),
-											sub: label.freeform ? "suggestions" : undefined,
-										}
-									: { text: label.type === "bool" ? "—" : "any text", tone: "muted" },
+									? { text: "", tags: label.values.map((v) => ({ text: v.text, color: colorOf(label, v.text), shade: shadeOf(label, v.text) })), sub: label.freeform ? "and any text" : undefined }
+									: { text: label.type === "bool" ? "—" : label.freeform ? "any text" : "none yet", tone: "muted" },
 								uses: uses(label),
 							},
 						})),
@@ -598,22 +628,23 @@ export function settingsScreen(data: Data, view: View, now: number): Node {
 
 // ── dialogs ─────────────────────────────────────────────────────────────
 
-/** Labels as the pill editor's keys: yes/no labels are flags, lookups pick from their values. */
 /**
- * Labels as the pill editor's keys: yes/no labels are flags, lookups pick from their values.
- * Free-text labels also suggest the values other tasks already have (an existing project).
+ * Labels as the pill editor's keys: yes/no labels are flags, text labels pick from their values
+ * (free-text ones take any text too), drawn in their shades or their own colors (those keys
+ * have no color of their own, so the picker shows them a rainbow dot).
  */
 export function tagKeys(data: Data): TagKey[] {
 	return data.labels.map((l) => {
 		if (l.type === "bool") return { key: String(l.id), label: l.name, color: l.color, flag: true };
-		const shades = Object.fromEntries(l.values.flatMap((v) => { const shade = shadeOf(l, v); return shade === undefined ? [] : [[v, shade]]; }));
+		const shades = Object.fromEntries(l.values.flatMap((v) => { const shade = shadeOf(l, v.text); return shade === undefined ? [] : [[v.text, shade]]; }));
 		return {
 			key: String(l.id),
 			label: l.name,
-			color: l.color,
-			values: l.freeform ? knownValues(data, l) : l.values,
+			...(!l.valueColors && { color: l.color }),
+			values: l.values.map((v) => v.text),
 			freeform: l.freeform,
 			...(Object.keys(shades).length && { shades }),
+			...(l.valueColors && { colors: Object.fromEntries(l.values.map((v) => [v.text, v.color])) }),
 		};
 	});
 }
@@ -776,44 +807,8 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 				],
 			};
 		}
-		case "label": {
-			const d = dialog.draft;
-			return {
-				id: "label",
-				title: dialog.id ? `Edit ${data.labels.find((l) => l.id === dialog.id)?.name ?? "label"}` : "New label",
-				actions: [save],
-				children: [
-					...error(dialog.error),
-					{
-						type: "form",
-						id: "label",
-						fields: [
-							{ type: "text", id: "name", label: "Name", value: d.name },
-							{ type: "select", id: "type", label: "Type", value: d.type, options: [{ value: "string", label: "Text" }, { value: "bool", label: "Yes/no" }] },
-							{ type: "color", id: "color", label: "Color", value: (HUES as readonly string[]).includes(d.color) ? (d.color as (typeof HUES)[number]) : "blue" },
-							...(d.type === "string"
-								? ([
-										{ type: "text", id: "values", label: "Values", value: d.values, placeholder: "High, Medium, Low", description: "Comma-separated lookup list." },
-										{ type: "switch", id: "freeform", label: "Allow any text", value: d.freeform, description: "Values become suggestions." },
-										{
-											type: "select",
-											id: "shades",
-											label: "Intensity",
-											value: d.shades || NONE,
-											options: [
-												{ value: NONE, label: "Same color for every value" },
-												{ value: "strongest-first", label: "Strongest first, then lighter" },
-												{ value: "lightest-first", label: "Lightest first, then stronger" },
-											],
-											description: "Gives each listed value its own shade of the color, in list order (High · Medium · Low).",
-										},
-									] satisfies Field[])
-								: []),
-						],
-					},
-				],
-			};
-		}
+		case "label":
+			return labelDialog(data, dialog);
 		case "updates":
 			return updatesDialog(data, dialog);
 		case "relationType":
@@ -955,6 +950,90 @@ export function quickView(data: Data, now: number): Node {
 				items: [...waiting, ...working].slice(0, 15).map(item),
 				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: STATE_ICONS.inbox },
 			},
+		],
+	};
+}
+
+/**
+ * The label editor, in three parts: what it is (name, type), its values (a list to add to,
+ * rename, reorder and recolor; whether tasks can add more) and how it's colored (one color,
+ * optionally shaded, or each value its own). Settings that don't apply are left out.
+ */
+function labelDialog(data: Data, dialog: Extract<Dialog, { kind: "label" }>): DialogNode {
+	const d = dialog.draft;
+	const label = dialog.id ? data.labels.find((l) => l.id === dialog.id) : undefined;
+	const counts = label ? valueCounts(data, label) : new Map<string, number>();
+	const text = d.type === "string";
+	const color: Field = { type: "color", id: "color", label: text ? "Label color" : "Color", value: d.color };
+	return {
+		id: "label",
+		title: label ? `Edit ${label.name}` : "New label",
+		actions: [save],
+		children: [
+			...error(dialog.error),
+			{
+				type: "form",
+				id: "label",
+				fields: [
+					{ type: "text", id: "name", label: "Name", value: d.name, placeholder: "Priority" },
+					{ type: "select", id: "type", label: "Type", value: d.type, options: [{ value: "string", label: "Text" }, { value: "bool", label: "Yes/no" }] },
+				],
+			},
+			...(text
+				? ([
+						{
+							type: "form",
+							id: "label-values",
+							fields: [
+								{
+									type: "options",
+									id: "values",
+									label: "Values",
+									value: d.values.map((v) => ({ key: v.key, text: v.text, ...(d.valueColors && { color: v.color }), ...(label && { count: counts.get(v.from ?? "") ?? 0 }) })),
+									colors: d.valueColors,
+									reorder: true,
+									placeholder: "Add value",
+									description: label ? "Renaming a value renames it on its tasks; removing one takes it off them." : undefined,
+								},
+								{ type: "switch", id: "freeform", label: "Allow free-form values", value: d.freeform, description: "Tasks can use new values, which join the list." },
+							],
+						},
+						{
+							type: "form",
+							id: "label-color",
+							fields: [
+								{
+									type: "select",
+									id: "valueColors",
+									label: "Colors",
+									value: d.valueColors ? "each" : "one",
+									options: [
+										{ value: "one", label: "One color for every value" },
+										{ value: "each", label: "Each value its own color" },
+									],
+									description: d.valueColors ? "Change a value's color with its dot. New values get the color the label uses least." : undefined,
+								},
+								...(d.valueColors ? [] : [color]),
+								...(!d.valueColors && d.values.length > 1
+									? ([
+											{
+												type: "select",
+												id: "shades",
+												label: "Intensity",
+												value: d.shades || NONE,
+												options: [
+													{ value: NONE, label: "The same for every value" },
+													{ value: "strongest-first", label: "Strongest first, then lighter" },
+													{ value: "lightest-first", label: "Lightest first, then stronger" },
+												],
+												description: "Shades the values in list order (High · Medium · Low).",
+											},
+										] satisfies Field[])
+									: []),
+							],
+						},
+					] satisfies Node[])
+				: ([{ type: "form", id: "label-color", fields: [color] }] satisfies Node[])),
 		],
 	};
 }

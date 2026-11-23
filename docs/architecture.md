@@ -91,19 +91,25 @@ on, and the lifecycle actions.
 | `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 4 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+Schema 5 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
 `relationTypes` and `order` (`inbox`, `working`: task ids in the person's order). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
-A task's `labels` maps label id to its value (`true` for yes/no labels). A label's optional
-`shades` (`strongest-first` or `lightest-first`) gives its listed values a `Tag.shade` in list
-order; absent means one color. It was added within schema 2 and older versions keep it. `due` is a local
+A task's `labels` maps label id to its value (`true` for yes/no labels). A text label's `values`
+are `{text, color}`: the one list of its values, and every value a task carries is in it. With
+`freeform`, a task saved with a new value adds it (`rememberValues`); without, other values are
+refused. Each value's color is picked when it's added (`leastUsedHue` from the SDK) and kept;
+`valueColors: true` draws values in their own colors instead of the label's. Without it, the
+optional `shades` (`strongest-first` or `lightest-first`) gives values a `Tag.shade` in list order.
+The label editor sends values as `{text, color, from}`: `from` (the text when the editor opened)
+makes a changed text a rename, applied to tasks; renaming onto another value merges them, and
+tasks whose value left the list lose it. `due` is a local
 wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a time zone. A relation
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
@@ -142,7 +148,9 @@ before the event returns, so `prepare` is always ready. Migration upgrades schem
 Status was Done become settled; the rest go to the Inbox in ID order) and schema 2 (every task
 gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (no task is watched yet;
 `pinned` and `order.pinned` are dropped, and pinned tasks get a yes/no "Pinned" label, made, or
-reused when one of that name exists, only if some task was pinned).
+reused when one of that name exists, only if some task was pinned) and schema 4 (a text label's
+values become `{text, color}` with colors it uses least, and values tasks typed into a free-text
+label join its list, A–Z, after the listed ones; labels keep showing one color).
 
 ## Tests
 
