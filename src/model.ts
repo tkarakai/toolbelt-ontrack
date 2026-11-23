@@ -1,30 +1,40 @@
 // OnTrack's data model and the pure operations on it. Nothing here touches the disk or the SDK,
 // so every rule is testable on plain objects.
-import { HUES, type Hue } from "@toolbelt/sdk";
+import { HUES, leastUsedHue, type Hue } from "@toolbelt/sdk";
 
-export const SCHEMA = 4;
+export const SCHEMA = 5;
 
 export type LabelType = "string" | "bool";
 
 /**
  * A label is a named, colored attribute a task can carry with one value.
  * - `bool` labels are either present (true) or absent; they have no values.
- * - `string` labels pick from `values` (a lookup list). With `freeform`, any text is accepted
- *   and `values` are only suggestions; a freeform label with no values is plain text.
+ * - `string` labels pick from `values`, the one list of every value the label has: every value
+ *   a task carries is in it. With `freeform`, tasks can add to it by typing a new value.
  */
 export type Label = {
 	id: number;
 	name: string;
 	type: LabelType;
+	/** The label's color: its name's dot, and every value's unless `valueColors`. */
 	color: Hue;
-	values: string[];
+	values: LabelValue[];
 	freeform: boolean;
+	/** Each value is drawn in its own color instead of the label's. */
+	valueColors?: true;
 	/**
-	 * Listed values get their own intensity of the color, in list order: the first strongest
-	 * (High · Medium · Low) or the first lightest. Absent: every value has the same color.
+	 * With one color (no `valueColors`), values get their own intensity of it, in list order: the
+	 * first strongest (High · Medium · Low) or the first lightest. Absent: all the same.
 	 */
 	shades?: LabelShades;
 };
+
+/**
+ * A value of a text label. Its color is chosen when the value is added (one the label uses least)
+ * and stays with it through renames and moves until the person changes it; it shows when the
+ * label has `valueColors`.
+ */
+export type LabelValue = { text: string; color: Hue };
 
 export type LabelShades = "strongest-first" | "lightest-first";
 export const LABEL_SHADES: readonly LabelShades[] = ["strongest-first", "lightest-first"];
@@ -136,10 +146,34 @@ const fail = (message: string): never => {
 
 export function seed(): Data {
 	const labels: Label[] = [
-		{ id: 1, name: "Project", type: "string", color: "blue", values: [], freeform: true },
+		{ id: 1, name: "Project", type: "string", color: "blue", values: [], freeform: true, valueColors: true },
 		{ id: 2, name: "isPersonal", type: "bool", color: "violet", values: [], freeform: false },
-		{ id: 3, name: "Priority", type: "string", color: "orange", values: ["High", "Medium", "Low"], freeform: false, shades: "strongest-first" },
-		{ id: 4, name: "Status", type: "string", color: "emerald", values: ["Todo", "In progress", "Blocked"], freeform: false },
+		{
+			id: 3,
+			name: "Priority",
+			type: "string",
+			color: "orange",
+			values: [
+				{ text: "High", color: "red" },
+				{ text: "Medium", color: "amber" },
+				{ text: "Low", color: "sky" },
+			],
+			freeform: false,
+			shades: "strongest-first",
+		},
+		{
+			id: 4,
+			name: "Status",
+			type: "string",
+			color: "emerald",
+			values: [
+				{ text: "Todo", color: "sky" },
+				{ text: "In progress", color: "violet" },
+				{ text: "Blocked", color: "rose" },
+			],
+			freeform: false,
+			valueColors: true,
+		},
 	];
 	return {
 		schema: SCHEMA,
@@ -187,51 +221,106 @@ export function dueAt(due: string): number {
 
 // ── labels ──────────────────────────────────────────────────────────────
 
-export type LabelInput = { name: string; type: LabelType; color: string; values: string[]; freeform: boolean; shades?: string };
+/**
+ * A value as the label editor sends it: `from` is its text when the editor opened (absent for
+ * a new value), so a changed text is a rename; `color` is kept, or one is picked when absent.
+ */
+export type LabelValueInput = { text: string; color?: string; from?: string };
 
-function checkLabel(data: Data, input: LabelInput, id?: number): Omit<Label, "id"> {
+export type LabelInput = { name: string; type: LabelType; color: string; values: LabelValueInput[]; freeform: boolean; valueColors?: boolean; shades?: string };
+
+const isHue = (c: unknown): c is Hue => (HUES as readonly unknown[]).includes(c);
+
+/** The color for one more value of `values`: one they use least (see `leastUsedHue`). */
+export const nextValueColor = (values: readonly LabelValue[], random?: () => number) => leastUsedHue(values.map((v) => v.color), random);
+
+/** A checked label, and the renames to apply to tasks (old text → new text). */
+function checkLabel(data: Data, input: LabelInput, id?: number, random?: () => number): { label: Omit<Label, "id">; renames: Map<string, string> } {
 	const name = input.name.trim() || fail("A label needs a name.");
 	if (data.labels.some((l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase())) fail(`There is already a label named ${name}.`);
 	if (input.type !== "string" && input.type !== "bool") fail("A label is either text or yes/no.");
-	if (!(HUES as readonly string[]).includes(input.color)) fail(`${input.color} is not a label color.`);
-	const values = input.type === "bool" ? [] : [...new Set(input.values.map((v) => v.trim()).filter(Boolean))];
+	if (!isHue(input.color)) fail(`${input.color} is not a label color.`);
 	if (input.shades && !(LABEL_SHADES as readonly string[]).includes(input.shades)) fail(`${input.shades} is not a way to shade values.`);
-	// Shades need at least two listed values to differ.
-	const shades = input.type === "string" && values.length > 1 && input.shades ? (input.shades as LabelShades) : undefined;
-	return { name, type: input.type, color: input.color as Hue, values, freeform: input.type === "string" && input.freeform, ...(shades && { shades }) };
+	const values: LabelValue[] = [];
+	const renames = new Map<string, string>();
+	if (input.type === "string")
+		for (const v of input.values) {
+			const text = v.text.trim();
+			if (!text) continue;
+			if (v.from !== undefined && v.from !== text) renames.set(v.from, text);
+			// Renaming onto another value merges the two: the first keeps its place and color.
+			if (values.some((x) => x.text === text)) continue;
+			values.push({ text, color: isHue(v.color) ? v.color : nextValueColor(values, random) });
+		}
+	const string = input.type === "string";
+	const valueColors = string && !!input.valueColors;
+	// Shades need one color and at least two values to differ.
+	const shades = string && !valueColors && values.length > 1 && input.shades ? (input.shades as LabelShades) : undefined;
+	return {
+		label: { name, type: input.type, color: input.color as Hue, values, freeform: string && input.freeform, ...(valueColors && { valueColors: true as const }), ...(shades && { shades }) },
+		renames,
+	};
 }
+
+const valueIndex = (label: Label, value: string | boolean) => (typeof value === "string" ? label.values.findIndex((v) => v.text === value) : -1);
 
 /** A listed value's intensity, 0 (lightest) to 1 (the full color), when its label shades values. */
 export function shadeOf(label: Label, value: string | boolean): number | undefined {
-	if (!label.shades || typeof value !== "string") return undefined;
-	const i = label.values.indexOf(value);
+	if (!label.shades || label.valueColors) return undefined;
+	const i = valueIndex(label, value);
 	const n = label.values.length;
 	if (i < 0 || n < 2) return undefined;
 	const strength = 1 - i / (n - 1);
 	return label.shades === "strongest-first" ? strength : 1 - strength;
 }
 
-export function addLabel(data: Data, input: LabelInput): Label {
-	const checked = checkLabel(data, input);
+/** The color a task's value is drawn in: its own with `valueColors`, else the label's. */
+export function colorOf(label: Label, value: string | boolean): Hue {
+	return (label.valueColors && label.values[valueIndex(label, value)]?.color) || label.color;
+}
+
+export function addLabel(data: Data, input: LabelInput, random?: () => number): Label {
+	const { label: checked } = checkLabel(data, input, undefined, random);
 	const label = { id: data.nextLabelId++, ...checked };
 	data.labels.push(label);
 	return label;
 }
 
-/** Edits a label. Task values that the new definition no longer allows are dropped. */
-export function updateLabel(data: Data, id: number, input: LabelInput, now: number): Label {
+/**
+ * Edits a label. Renamed values are renamed on the tasks that carry them (renaming onto another
+ * value merges them); values no longer listed are removed from tasks, as is everything when the
+ * label becomes yes/no.
+ */
+export function updateLabel(data: Data, id: number, input: LabelInput, now: number, random?: () => number): Label {
 	const label = findLabel(data, id);
-	const checked = checkLabel(data, input, id);
+	const { label: checked, renames } = checkLabel(data, input, id, random);
 	delete label.shades;
+	delete label.valueColors;
 	Object.assign(label, checked);
 	for (const task of data.tasks) {
 		const value = task.labels[id];
-		if (value !== undefined && !allowed(label, value)) {
+		if (value === undefined) continue;
+		const renamed = typeof value === "string" ? renames.get(value) : undefined;
+		if (renamed !== undefined) {
+			task.labels[id] = renamed;
+			task.updated = now;
+		}
+		if (!listed(label, task.labels[id]!)) {
 			delete task.labels[id];
 			task.updated = now;
 		}
 	}
 	return label;
+}
+
+/** How many tasks carry each of a label's values (all tasks, archived too). */
+export function valueCounts(data: Data, label: Label): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const t of data.tasks) {
+		const v = t.labels[label.id];
+		if (typeof v === "string") counts.set(v, (counts.get(v) ?? 0) + 1);
+	}
+	return counts;
 }
 
 export function deleteLabel(data: Data, id: number, now: number) {
@@ -246,8 +335,18 @@ export function deleteLabel(data: Data, id: number, now: number) {
 
 export const findLabel = (data: Data, id: number) => data.labels.find((l) => l.id === id) ?? fail(`Label ${id} no longer exists.`);
 
-const allowed = (label: Label, value: string | boolean) =>
-	label.type === "bool" ? value === true : typeof value === "string" && value !== "" && (label.freeform || label.values.includes(value));
+/** A value the label has: yes for yes/no labels, a listed value for text labels. */
+const listed = (label: Label, value: string | boolean) => (label.type === "bool" ? value === true : valueIndex(label, value) >= 0);
+/** A value a task may be given: a listed one, or any text when tasks can add values. */
+const allowed = (label: Label, value: string | boolean) => listed(label, value) || (label.type === "string" && label.freeform && typeof value === "string" && value !== "");
+
+/** Typed values new to their label join its list, each with a color of its own. */
+function rememberValues(data: Data, labels: Task["labels"], random?: () => number) {
+	for (const [id, value] of Object.entries(labels)) {
+		const label = data.labels.find((l) => String(l.id) === id);
+		if (label && typeof value === "string" && !listed(label, value)) label.values.push({ text: value, color: nextValueColor(label.values, random) });
+	}
+}
 
 // ── tasks ───────────────────────────────────────────────────────────────
 
@@ -266,8 +365,9 @@ function checkTask(data: Data, input: TaskInput): Pick<Task, "name" | "due" | "d
 	return { name, due: parseDue(input.due), desc: input.desc, labels };
 }
 
-export function addTask(data: Data, input: TaskInput, now: number): Task {
+export function addTask(data: Data, input: TaskInput, now: number, random?: () => number): Task {
 	const checked = checkTask(data, input);
+	rememberValues(data, checked.labels, random);
 	const task: Task = {
 		id: data.nextTaskId++,
 		created: now,
@@ -287,9 +387,10 @@ export function addTask(data: Data, input: TaskInput, now: number): Task {
 	return task;
 }
 
-export function updateTask(data: Data, id: number, input: TaskInput, now: number): Task {
+export function updateTask(data: Data, id: number, input: TaskInput, now: number, random?: () => number): Task {
 	const task = findTask(data, id);
 	const next = checkTask(data, input);
+	rememberValues(data, next.labels, random);
 	Object.assign(task, next, { updated: now });
 	if (next.due === undefined) delete task.due;
 	// A new due date is announced again when it arrives.
@@ -469,6 +570,7 @@ export function parseData(value: unknown): Data {
 	if (d.tasks.some((t) => !Array.isArray(t?.updates))) fail("The data file is damaged.");
 	if (d.tasks.some((t) => t.watch !== undefined && (typeof t.watch?.since !== "number" || !Number.isInteger(t.watch.checks)))) fail("The data file is damaged.");
 	if (!d.order || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
+	if (d.labels.some((l) => !Array.isArray(l?.values) || l.values.some((v) => typeof v?.text !== "string" || !isHue(v.color)))) fail("The data file is damaged.");
 	return d;
 }
 
@@ -503,7 +605,7 @@ export function upgrade2to3(old: any): any {
  * is gone. Pins become a yes/no label "Pinned" (made only when some task was pinned, or reused
  * when a yes/no label of that name exists), so nothing is lost and it can be filtered by.
  */
-export function upgrade3to4(old: any): Data {
+export function upgrade3to4(old: any): any {
 	if (!old || old.schema !== 3 || !Array.isArray(old.tasks)) fail("Expected schema 3 data.");
 	const { pinned: _order, ...order } = old.order ?? {};
 	let labels: Label[] = old.labels;
@@ -520,5 +622,29 @@ export function upgrade3to4(old: any): Data {
 		}
 	}
 	const tasks = old.tasks.map(({ pinned, ...t }: any) => (pinned && label ? { ...t, labels: { ...t.labels, [label.id]: true } } : t));
-	return { ...old, schema: SCHEMA, nextLabelId, labels, tasks, order: { inbox: order.inbox ?? [], working: order.working ?? [] } };
+	return { ...old, schema: 4, nextLabelId, labels, tasks, order: { inbox: order.inbox ?? [], working: order.working ?? [] } };
+}
+
+/**
+ * Schema 4 → 5: a text label's values become one list with a color each. Listed values get
+ * colors the label uses least, in list order; values tasks typed into a free-text label join its
+ * list after them (A–Z). Labels keep showing one color until the person chooses otherwise.
+ */
+export function upgrade4to5(old: any, random?: () => number): Data {
+	if (!old || old.schema !== 4 || !Array.isArray(old.tasks) || !Array.isArray(old.labels)) fail("Expected schema 4 data.");
+	const labels: Label[] = old.labels.map((l: any) => {
+		const values: LabelValue[] = [];
+		const add = (text: string, color?: unknown) => !values.some((v) => v.text === text) && values.push({ text, color: isHue(color) ? color : nextValueColor(values, random) });
+		if (l.type === "string") {
+			for (const v of l.values ?? []) {
+				// Retry-safe: values already in the new shape keep their colors.
+				const text = typeof v === "string" ? v.trim() : typeof v?.text === "string" ? v.text.trim() : "";
+				if (text) add(text, v?.color);
+			}
+			const typed = old.tasks.map((t: any) => t.labels?.[l.id]).filter((v: unknown): v is string => typeof v === "string" && v !== "");
+			for (const v of [...new Set<string>(typed)].sort((a, b) => a.localeCompare(b))) add(v);
+		}
+		return { ...l, values };
+	});
+	return { ...old, schema: SCHEMA, labels };
 }

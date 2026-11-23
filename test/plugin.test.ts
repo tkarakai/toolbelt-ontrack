@@ -221,13 +221,16 @@ test("relates through the searchable task picker; settling a blocker marks the b
 	expect(rows().find((r) => r.id === "3").cells.name.sub).toBe("Unblocked: #1 is settled");
 });
 
+/** A field of the open label dialog, whichever of its forms holds it. */
+const labelField = (id: string) => tree("screen:labels").dialog.children.flatMap((c: any) => c.fields ?? []).find((f: any) => f.id === id);
+
 test("labels use the color field", async () => {
 	const { saved, event } = await start();
 	await event("new-label", undefined, "screen:labels");
-	const color = tree("screen:labels").dialog.children[0].fields.find((f: any) => f.id === "color");
+	const color = labelField("color");
 	expect(color).toMatchObject({ type: "color", value: "blue" });
 	await event("field", { form: "label", field: "name", value: "Area" }, "screen:labels");
-	await event("field", { form: "label", field: "color", value: "teal" }, "screen:labels");
+	await event("field", { form: "label-color", field: "color", value: "teal" }, "screen:labels");
 	await event("save", { dialog: "label" }, "screen:labels");
 	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Area", color: "teal" });
 });
@@ -241,32 +244,96 @@ test("Settings has a New button above each table, and labels can shade their val
 		["card", "Relation types", ["new-relation-type"], "relation-types"],
 	]);
 	await event("new-label", undefined, "screen:labels");
-	const shades = () => tree("screen:labels").dialog.children[0].fields.find((f: any) => f.id === "shades");
-	expect(shades()).toMatchObject({ type: "select", value: "__none" });
+	const shades = () => labelField("shades");
+	// Intensity needs two values to shade.
+	expect(shades()).toBeUndefined();
 	await event("field", { form: "label", field: "name", value: "Effort" }, "screen:labels");
-	await event("field", { form: "label", field: "values", value: "S, M, L" }, "screen:labels");
-	await event("field", { form: "label", field: "shades", value: "lightest-first" }, "screen:labels");
+	await event("field", { form: "label-values", field: "values", value: [{ text: "S" }, { text: "M" }, { text: "L" }] }, "screen:labels");
+	expect(shades()).toMatchObject({ type: "select", value: "__none" });
+	await event("field", { form: "label-color", field: "shades", value: "lightest-first" }, "screen:labels");
 	await event("save", { dialog: "label" }, "screen:labels");
-	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Effort", values: ["S", "M", "L"], shades: "lightest-first" });
+	expect(saved.at(-1)!.labels.at(-1)).toMatchObject({ name: "Effort", shades: "lightest-first" });
+	expect(saved.at(-1)!.labels.at(-1)!.values.map((v) => v.text)).toEqual(["S", "M", "L"]);
 	const values = tree("screen:labels").children[0].children[0].rows.at(-1).cells.values.tags;
 	expect(values.map((t: any) => [t.text, t.shade])).toEqual([["S", 0], ["M", 0.5], ["L", 1]]);
 	// Back to one color.
 	await event("edit-label", { rowId: `l${saved.at(-1)!.labels.at(-1)!.id}` }, "screen:labels");
 	expect(shades().value).toBe("lightest-first");
-	await event("field", { form: "label", field: "shades", value: "__none" }, "screen:labels");
+	await event("field", { form: "label-color", field: "shades", value: "__none" }, "screen:labels");
 	await event("save", { dialog: "label" }, "screen:labels");
 	expect(saved.at(-1)!.labels.at(-1)!.shades).toBeUndefined();
 });
 
-test("free-text labels suggest the values other tasks already use", async () => {
-	const d = fixture();
-	d.tasks[0]!.labels[1] = "Toolbelt";
-	d.tasks[1]!.labels[1] = "Garden";
-	const { event } = await start(d);
+test("values typed on a task join the label's list, with colors the editor and pills use", async () => {
+	const { saved, event } = await start(fixture());
+	await event("new-task");
+	await event("field", { form: "task", field: "name", value: "Plant" });
+	await event("field", { form: "task", field: "labels", value: [{ key: "1", value: "Garden" }] });
+	await event("save", { dialog: "task" });
+	const project = saved.at(-1)!.labels[0]!;
+	expect(project.values.map((v) => v.text)).toEqual(["Garden"]);
 	await event("new-task");
 	const keys = tree("screen:tasks").dialog.children[0].fields.find((f: any) => f.id === "labels").keys;
-	expect(keys.find((k: any) => k.label === "Project")).toMatchObject({ values: ["Garden", "Toolbelt"], freeform: true });
+	// Project colors each value; Priority shades one color.
+	expect(keys.find((k: any) => k.label === "Project")).toMatchObject({ values: ["Garden"], freeform: true, colors: { Garden: project.values[0]!.color } });
 	expect(keys.find((k: any) => k.label === "Priority")).toMatchObject({ values: ["High", "Medium", "Low"], shades: { High: 1, Medium: 0.5, Low: 0 } });
+	expect(keys.find((k: any) => k.label === "Priority").colors).toBeUndefined();
+	// A label coloring each value has no color of its own: the host shows it a rainbow dot.
+	expect(keys.find((k: any) => k.label === "Project").color).toBeUndefined();
+	expect(keys.find((k: any) => k.label === "Priority").color).toBeDefined();
+	const plant = rows().find((r: any) => r.cells.name.text === "Plant");
+	expect(plant.cells.name.tags).toEqual([{ text: "Garden", color: project.values[0]!.color, tooltip: "Project", shade: undefined }]);
+});
+
+test("the label editor renames, merges, recolors, reorders and removes values", async () => {
+	const d = fixture();
+	d.tasks[0]!.labels[3] = "High";
+	addTask(d, { name: "Low one", due: "", desc: "", labels: { 3: "Low" } }, START);
+	addTask(d, { name: "Medium one", due: "", desc: "", labels: { 3: "Medium" } }, START);
+	const { saved, event } = await start(d);
+	await event("edit-label", { rowId: "l3" }, "screen:labels");
+	const list = () => labelField("values");
+	// Counts are per value; dots show only with a color per value.
+	expect(list()).toMatchObject({ type: "options", reorder: true, colors: false });
+	expect(list().value.map((v: any) => [v.key, v.text, v.count, v.color])).toEqual([
+		["v:High", "High", 1, undefined],
+		["v:Medium", "Medium", 1, undefined],
+		["v:Low", "Low", 1, undefined],
+	]);
+	await event("field", { form: "label-color", field: "valueColors", value: "each" }, "screen:labels");
+	expect(list().colors).toBe(true);
+	// Label color and Intensity only apply with one color.
+	expect(labelField("shades")).toBeUndefined();
+	expect(labelField("color")).toBeUndefined();
+	expect(list().value.map((v: any) => v.color)).toEqual(["red", "amber", "sky"]);
+	// Low → Urgent (moved to the top, recolored), Medium merged into High, a new value added.
+	await event(
+		"field",
+		{ form: "label-values", field: "values", value: [{ key: "v:Low", text: "Urgent", color: "fuchsia" }, { key: "v:High", text: "High", color: "red" }, { key: "v:Medium", text: "High", color: "amber" }, { text: "Someday", color: "teal" }] },
+		"screen:labels",
+	);
+	expect(list().value.map((v: any) => v.key)).toEqual(["v:Low", "v:High", "v:Medium", "n:1"]);
+	await event("save", { dialog: "label" }, "screen:labels");
+	const after = saved.at(-1)!;
+	const priority = after.labels.find((l) => l.id === 3)!;
+	const labelRow = (id: string) => tree("screen:labels").children[0].children[0].rows.find((r: any) => r.id === id);
+	expect(labelRow("l3").cells.name.dot).toBe("rainbow");
+	expect(labelRow("l2").cells.name.dot).not.toBe("rainbow");
+	expect(priority.values).toEqual([
+		{ text: "Urgent", color: "fuchsia" },
+		{ text: "High", color: "red" },
+		{ text: "Someday", color: "teal" },
+	]);
+	expect(priority.valueColors).toBe(true);
+	expect(after.tasks.map((t): unknown => t.labels[3])).toEqual(["High", undefined, undefined, "Urgent", "High"]);
+	// Removing a value removes it from its tasks.
+	await event("edit-label", { rowId: "l3" }, "screen:labels");
+	await event("field", { form: "label-values", field: "values", value: list().value.filter((v: any) => v.text !== "Urgent") }, "screen:labels");
+	await event("save", { dialog: "label" }, "screen:labels");
+	expect(saved.at(-1)!.tasks.map((t): unknown => t.labels[3])).toEqual(["High", undefined, undefined, undefined, "High"]);
+	expect(toasts().at(-1)).toMatchObject({ text: "Saved Priority; 1 task lost its value", action: { id: "undo" } });
+	await event("undo", undoPayload(), "toast");
+	expect(saved.at(-1)!.tasks.map((t): unknown => t.labels[3])).toEqual(["High", undefined, undefined, "Urgent", "High"]);
 });
 
 test("updates: add several from the dialog, edit one with its times, delete with Undo", async () => {

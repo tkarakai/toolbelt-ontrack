@@ -66,17 +66,46 @@ describe("labels", () => {
 	test("names are unique and bool labels have no values", () => {
 		const d = m.seed();
 		expect(() => m.addLabel(d, { name: "status", type: "string", color: "red", values: [], freeform: false })).toThrow(m.InvalidInput);
-		const l = m.addLabel(d, { name: "Urgent", type: "bool", color: "red", values: ["a"], freeform: true });
+		const l = m.addLabel(d, { name: "Urgent", type: "bool", color: "red", values: [{ text: "a" }], freeform: true });
 		expect(l).toEqual({ id: 5, name: "Urgent", type: "bool", color: "red", values: [], freeform: false });
 		expect(() => m.addLabel(d, { name: "X", type: "string", color: "magenta", values: [], freeform: false })).toThrow(m.InvalidInput);
 	});
 	test("narrowing a lookup list drops values tasks can no longer have", () => {
 		const d = m.seed();
 		const t = task(d, "x", { labels: { 3: "Low", 4: "Todo" } });
-		m.updateLabel(d, 3, { name: "Priority", type: "string", color: "orange", values: ["High", " Medium ", "High"], freeform: false }, NOW + 1);
-		expect(d.labels[2]!.values).toEqual(["High", "Medium"]);
+		m.updateLabel(d, 3, { name: "Priority", type: "string", color: "orange", values: [{ text: "High", color: "red" }, { text: " Medium ", color: "amber" }, { text: "High" }], freeform: false }, NOW + 1);
+		expect(d.labels[2]!.values).toEqual([{ text: "High", color: "red" }, { text: "Medium", color: "amber" }]);
 		expect(t.labels).toEqual({ 4: "Todo" });
 		expect(t.updated).toBe(NOW + 1);
+	});
+	test("renaming a value renames it on tasks; renaming onto another merges them", () => {
+		const d = m.seed();
+		const a = task(d, "a", { labels: { 3: "Low" } });
+		const b = task(d, "b", { labels: { 3: "Medium" } });
+		const c = task(d, "c", { labels: { 3: "High" } });
+		m.updateLabel(d, 3, { name: "Priority", type: "string", color: "orange", values: [{ text: "Top", color: "red", from: "High" }, { text: "Top", color: "amber", from: "Medium" }, { text: "Later", color: "sky", from: "Low" }], freeform: false }, NOW + 1);
+		expect(d.labels[2]!.values).toEqual([{ text: "Top", color: "red" }, { text: "Later", color: "sky" }]);
+		expect([a, b, c].map((t) => t.labels[3])).toEqual(["Later", "Top", "Top"]);
+		// Swapping two names swaps them on tasks too.
+		m.updateLabel(d, 3, { name: "Priority", type: "string", color: "orange", values: [{ text: "Later", from: "Top" }, { text: "Top", from: "Later" }], freeform: false }, NOW + 2);
+		expect([a, b, c].map((t) => t.labels[3])).toEqual(["Top", "Later", "Later"]);
+	});
+	test("new values get a color the label uses least, and typed values join a free-text label", () => {
+		const d = m.seed();
+		const l = m.addLabel(d, { name: "Area", type: "string", color: "blue", values: [{ text: "Home", color: "red" }, { text: "Work" }], freeform: true, valueColors: true }, () => 0);
+		expect(l.values[1]!.color).not.toBe("red");
+		expect(["slate", "stone", "orange", "rose"]).not.toContain(l.values[1]!.color);
+		const t = m.addTask(d, { name: "x", due: "", desc: "", labels: { [l.id]: " Garden " } }, NOW, () => 0);
+		expect(t.labels[l.id]).toBe("Garden");
+		expect(l.values.map((v) => v.text)).toEqual(["Home", "Work", "Garden"]);
+		expect(new Set(l.values.map((v) => v.color)).size).toBe(3);
+		expect(m.colorOf(l, "Garden")).toBe(l.values[2]!.color);
+		// Lookups still refuse unknown values, and add nothing.
+		expect(() => task(d, "y", { labels: { 3: "Whenever" } })).toThrow(m.InvalidInput);
+		expect(d.labels[2]!.values).toHaveLength(3);
+		// One color: every value is drawn in the label's.
+		expect(m.colorOf(d.labels[2]!, "High")).toBe("orange");
+		expect(m.valueCounts(d, l)).toEqual(new Map([["Garden", 1]]));
 	});
 	test("deleting a label removes it from tasks", () => {
 		const d = m.seed();
@@ -167,10 +196,12 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	expect(() => m.upgrade2to3(three)).toThrow(m.InvalidInput);
 	const four = m.upgrade3to4(three);
 	expect(four.schema).toBe(4);
-	expect(m.parseData(JSON.parse(JSON.stringify(four)))).toEqual(JSON.parse(JSON.stringify(four)));
 	expect(() => m.upgrade3to4(four)).toThrow(m.InvalidInput);
+	const five = m.upgrade4to5(four);
+	expect(m.parseData(JSON.parse(JSON.stringify(five)))).toEqual(JSON.parse(JSON.stringify(five)));
+	expect(() => m.upgrade4to5(five)).toThrow(m.InvalidInput);
 	expect(four.order).toEqual({ inbox: [1], working: [] });
-	expect(four.tasks.some((t) => "pinned" in t)).toBe(false);
+	expect(four.tasks.some((t: any) => "pinned" in t)).toBe(false);
 	expect(four.labels).toEqual(three.labels); // nothing was pinned, so no label
 	// Pins become a yes/no label, reusing one named Pinned when it's yes/no.
 	const pinnedThree = { ...three, order: { ...three.order, pinned: [2] }, tasks: three.tasks.map((t: any) => ({ ...t, pinned: t.id === 2 })) };
@@ -178,7 +209,7 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	const label = withPins.labels.at(-1)!;
 	expect(label).toMatchObject({ id: three.nextLabelId, name: "Pinned", type: "bool" });
 	expect(withPins.nextLabelId).toBe(three.nextLabelId + 1);
-	expect(withPins.tasks.map((t) => t.labels[label.id] === true)).toEqual([false, true]);
+	expect(withPins.tasks.map((t: any) => t.labels[label.id] === true)).toEqual([false, true]);
 	const taken = { ...pinnedThree, labels: [...three.labels, { id: 99, name: "pinned", type: "string", color: "red", values: [], freeform: true }] };
 	expect(m.upgrade3to4(taken).labels.at(-1)!.name).toBe("Pinned 2");
 	const reuse = { ...pinnedThree, labels: [...three.labels, { id: 99, name: "Pinned", type: "bool", color: "red", values: [], freeform: false }] };
@@ -254,6 +285,36 @@ test("the table shows the description's first line without Markdown", () => {
 	expect(snippet("  ")).toBeUndefined();
 });
 
+test("schema 4 → 5: values get colors; typed values join free-text labels after the listed ones", () => {
+	const four = {
+		...m.seed(),
+		schema: 4,
+		labels: [
+			{ id: 1, name: "Project", type: "string", color: "blue", values: ["Toolbelt"], freeform: true },
+			{ id: 2, name: "isPersonal", type: "bool", color: "violet", values: [], freeform: false },
+			{ id: 3, name: "Priority", type: "string", color: "orange", values: ["High", "Medium", "Low"], freeform: false, shades: "strongest-first" },
+		],
+		tasks: [
+			{ id: 1, labels: { 1: "Garden", 3: "High" } },
+			{ id: 2, labels: { 1: "Toolbelt", 2: true } },
+			{ id: 3, labels: { 1: "Attic" } },
+		],
+	};
+	const five = m.upgrade4to5(four, () => 0);
+	expect(five.schema).toBe(m.SCHEMA);
+	const [project, flag, priority] = five.labels;
+	expect(project!.values.map((v) => v.text)).toEqual(["Toolbelt", "Attic", "Garden"]);
+	expect(new Set(project!.values.map((v) => v.color)).size).toBe(3);
+	expect(flag!.values).toEqual([]);
+	expect(priority!.values.map((v) => v.text)).toEqual(["High", "Medium", "Low"]);
+	// Still one color, still shaded.
+	expect(priority).toMatchObject({ shades: "strongest-first" });
+	expect(priority!.valueColors).toBeUndefined();
+	// Values already in the new shape keep their colors (a retried migration).
+	const again = m.upgrade4to5({ ...four, labels: five.labels });
+	expect(again.labels).toEqual(five.labels);
+});
+
 describe("label shades", () => {
 	test("listed values get intensities in list order; others and unshaded labels get none", () => {
 		const d = m.seed();
@@ -262,13 +323,17 @@ describe("label shades", () => {
 		const status = d.labels.find((l) => l.name === "Status")!;
 		expect(m.shadeOf(status, "Todo")).toBeUndefined();
 		m.updateLabel(d, status.id, { name: "Status", type: "string", color: "emerald", values: status.values, freeform: false, shades: "lightest-first" }, NOW);
-		expect(status.values.map((v) => m.shadeOf(status, v))).toEqual([0, 0.5, 1]);
+		expect(status.values.map((v) => m.shadeOf(status, v.text))).toEqual([0, 0.5, 1]);
+		// A color per value takes the place of shades.
+		m.updateLabel(d, status.id, { name: "Status", type: "string", color: "emerald", values: status.values, freeform: false, valueColors: true, shades: "lightest-first" }, NOW);
+		expect(status.shades).toBeUndefined();
+		expect(m.shadeOf(status, "Todo")).toBeUndefined();
 	});
 	test("shades need two listed values and a known order", () => {
 		const d = m.seed();
-		const one = m.addLabel(d, { name: "Solo", type: "string", color: "blue", values: ["Only"], freeform: false, shades: "strongest-first" });
+		const one = m.addLabel(d, { name: "Solo", type: "string", color: "blue", values: [{ text: "Only" }], freeform: false, shades: "strongest-first" });
 		expect(one.shades).toBeUndefined();
-		expect(() => m.addLabel(d, { name: "Bad", type: "string", color: "blue", values: ["a", "b"], freeform: false, shades: "sideways" })).toThrow(m.InvalidInput);
+		expect(() => m.addLabel(d, { name: "Bad", type: "string", color: "blue", values: [{ text: "a" }, { text: "b" }], freeform: false, shades: "sideways" })).toThrow(m.InvalidInput);
 		const flag = m.addLabel(d, { name: "Flag", type: "bool", color: "blue", values: [], freeform: false, shades: "strongest-first" });
 		expect(flag.shades).toBeUndefined();
 	});

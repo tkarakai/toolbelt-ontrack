@@ -166,17 +166,26 @@ and an update can't be last updated before it was added. Deleting offers Undo.
 A label has a name, a color and a type:
 
 - **Yes/no** labels are either on a task or not (isPersonal).
-- **Lookup** labels pick one value from their list (Priority: High, Medium, Low).
-- **Free text** labels accept any value; their list, if any, holds suggestions, followed by the
-  values other tasks already use (Project).
+- **Text** labels pick one value from their list (Priority: High, Medium, Low). With **Allow
+  free-form values**, a task can also use a new value, which then joins the list (Project).
 
-A text label can give its listed values their own **intensity** of its color, in list order:
+The label editor keeps a text label's values in one list: type in the last row to add one
+(Return keeps adding; pasting several lines adds one value per line), click a value to rename
+it, drag its grip or press ⌥↑ ⌥↓ to move it, and remove it with ×. Each value shows how many
+tasks use it. Renaming a value renames it on those tasks (renaming it to another value's name
+merges the two); removing one takes it off them, and saving then offers Undo.
+
+**Colors**: a text label draws its values either in one **label color** or **each in its own
+color** (the label then shows a rainbow dot instead of a color of its own). Every value gets a color when it's added (one the label uses least, never grey) and
+keeps it through renames and moves; with a color per value, click a value's dot to change it.
+With one color, the values can instead get their own **intensity** of it, in list order:
 strongest first (High · Medium · Low, as Priority does on a fresh install) or lightest first.
-Every shade keeps its text readable in light and dark themes.
+Every shade and color keeps its text readable in light and dark themes.
 
-A fresh install has Project, isPersonal, Priority and Status (Todo, In progress, Blocked; done is
-Settled). The label's color is used for its pills, filter dots and details. Narrowing a lookup list or deleting a label removes the values
-tasks can no longer have.
+A fresh install has Project and Status coloring each value, isPersonal, and Priority shading
+its values (Status: Todo, In progress, Blocked; done is Settled). Colors show on pills, filter
+dots, details and in the task editor's value picker. Deleting a label removes it from every
+task.
 
 ### Relations
 

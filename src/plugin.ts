@@ -2,11 +2,11 @@
 // saved immediately, and the open surfaces re-render. In active mode a timer wakes snoozed
 // tasks, brings watched tasks back for their check-ins and announces due dates; probe mode
 // starts no timers.
-import type { Context, PluginDefinition } from "@toolbelt/sdk";
+import { HUES, type Context, type Hue, type PluginDefinition } from "@toolbelt/sdk";
 import * as life from "./lifecycle";
 import * as model from "./model";
-import { InvalidInput, type Data, type LabelType } from "./model";
-import { attention, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
+import { InvalidInput, type Data } from "./model";
+import { applyValues, attention, fieldValue, fromTagValues, initialView, labelDraft, labelInput, quickView, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number; readAfterMs?: number };
 
@@ -212,11 +212,14 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 					if (p.field === "repeat") setRepeat(dialog, String(value), t);
 					if (p.field === "next") (dialog.next = String(value)), (dialog.nextSet = true);
 					if (p.field === "note") dialog.note = String(value);
-				} else if (dialog?.kind === "label" && p?.form === "label") {
+				} else if (dialog?.kind === "label" && typeof p?.form === "string" && p.form.startsWith("label")) {
 					const d = dialog.draft;
-					if (p.field === "name" || p.field === "values" || p.field === "color" || p.field === "shades") d[p.field as "name"] = String(value);
+					if (p.field === "name" || p.field === "shades") d[p.field as "name"] = String(value);
+					if (p.field === "color" && (HUES as readonly unknown[]).includes(value)) d.color = value as Hue;
 					if (p.field === "type") d.type = value === "bool" ? "bool" : "string";
 					if (p.field === "freeform") d.freeform = value === true;
+					if (p.field === "valueColors") d.valueColors = value === "each";
+					if (p.field === "values") applyValues(d, value);
 				} else if (dialog?.kind === "relationType" && p?.form === "relationType") {
 					if (p.field === "name" || p.field === "inverse") dialog[p.field as "name"] = String(value);
 				} else if (dialog?.kind === "updates" && p?.form === "update-new") {
@@ -316,11 +319,11 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 				offerUndo(c, `Deleted ${name2(rowId())}`, before);
 				return true;
 			case "new-label":
-				view.dialog = { kind: "label", draft: { name: "", type: "string", color: "blue", values: "", freeform: false, shades: "" } };
+				view.dialog = { kind: "label", draft: labelDraft() };
 				return false;
 			case "edit-label": {
 				const l = model.findLabel(data, rowId());
-				view.dialog = { kind: "label", id: l.id, draft: { name: l.name, type: l.type, color: l.color, values: l.values.join(", "), freeform: l.freeform, shades: l.shades ?? "" } };
+				view.dialog = { kind: "label", id: l.id, draft: labelDraft(l) };
 				return false;
 			}
 			case "delete-label": {
@@ -394,10 +397,19 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 					view.dialog = e.closeAfter ? undefined : { kind: "updates", id: dialog.id, draft: dialog.draft };
 					return true;
 				} else if (dialog.kind === "label") {
-					const d = dialog.draft;
-					const input = { ...d, type: d.type as LabelType, values: d.values.split(",") };
-					if (dialog.id) model.updateLabel(data, dialog.id, input, t);
-					else model.addLabel(data, input);
+					const input = labelInput(dialog.draft);
+					if (dialog.id) {
+						// Values taken off tasks (removed, or the label made yes/no) can be undone.
+						const id = dialog.id;
+						const had = data.tasks.filter((task) => task.labels[id] !== undefined).length;
+						const label = model.updateLabel(data, id, input, t);
+						const lost = had - data.tasks.filter((task) => task.labels[id] !== undefined).length;
+						if (lost) {
+							view.dialog = undefined;
+							offerUndo(c, `Saved ${label.name}; ${lost} task${lost === 1 ? " lost its value" : "s lost their values"}`, before);
+							return true;
+						}
+					} else model.addLabel(data, input);
 				} else if (dialog.kind === "relationType") {
 					model.saveRelationType(data, { id: dialog.id, name: dialog.name, inverse: dialog.inverse });
 				}
