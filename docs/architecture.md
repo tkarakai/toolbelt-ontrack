@@ -14,19 +14,20 @@ The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `appearance: "document"`, `sections` (inbox, working titled
-Progressing, settled), `reorder` and `selectEvents`; New task has key N. Progressing has no rows
-of its own: Working on it, Snoozed and Watching rows use a group path inside it
-(`["working", SUBGROUPS.snoozed]`), so they show as three groups, in that order. The host reports drops into those groups as `working`;
-`dropSection` tells them apart from `before` (before a group's first row ends the group above,
-`null` joins the last group shown). Saving a new task calls `navigate("tasks", {select})` so the
+The Tasks table declares `appearance: "document"`, `sections` (inbox, progressing, settled),
+`reorder` and `selectEvents`; New task has key N. Progressing has no rows of its own: it declares
+the sub-sections working (titled Working on it), snoozed and watching (`ui.sub-sections`), and
+each row's `group` is its state's section id. Snoozed and Watching sort themselves (`order:
+"fixed"`). A drop reports the sub-section's id; `dropSection` maps a drop on Progressing itself
+to working. Undo toasts carry `key: "cmd+z"` (`ui.toast-key`). Saving a new task calls `navigate("tasks", {select})` so the
 list lands on it (optional `navigate` capability). Settings wraps each table in a card
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
 read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
-`ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer) and `ui.composer`
-(update boxes, the quick view's New task line and its Add update prompt). The package is portable
-JavaScript, uses SDK 0.3.8 and needs Toolbelt 0.3.13 or newer.
+`ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer), `ui.composer`
+(update boxes, the quick view's New task line and its Add update prompt), `assets` (state
+icons), `ui.sub-sections` (Progressing) and `ui.toast-key` (⌘Z for Undo). The package is portable
+JavaScript, uses SDK 0.3.9 and needs Toolbelt 0.3.14 or newer.
 
 Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
 heading, status, due, labels, description), a facts line, a Related section and an Updates

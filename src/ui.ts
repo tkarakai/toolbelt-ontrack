@@ -1,7 +1,7 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Node, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { cadenceLabel, defaultCheck, PROGRESSING, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { dueAt, relationsOf, shadeOf, toLocalInput, updatesOf, type Cadence, type Data, type Label, type LabelInput, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -247,30 +247,29 @@ export const STATE_ICONS = {
 };
 
 /**
- * The table's top-level sections. Progressing (id `working`) has no tasks of its own: its tasks
- * show in three groups inside it (`SUBGROUPS`), Working, Snoozed and Watching, everything still
- * in motion.
+ * The table's sections. Progressing has no tasks of its own: its tasks show in three
+ * sub-sections (`ui.sub-sections`), Working on it, Snoozed and Watching, everything still in
+ * motion. Each takes drops as its own move; a drop on Progressing itself starts work.
  */
-export const SECTIONS: (Section & { id: SectionId })[] = [
+export const SECTIONS: Section[] = [
 	{ id: "inbox", label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
-	{ id: "working", label: "Progressing", icon: STATE_ICONS.progressing, empty: "Nothing in progress", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+	{
+		id: PROGRESSING,
+		label: "Progressing",
+		icon: STATE_ICONS.progressing,
+		dropLabel: "Start working on it",
+		dropIcon: STATE_ICONS.working,
+		sections: [
+			{ id: "working", label: "Working on it", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+			{ id: "snoozed", label: "Snoozed", icon: STATE_ICONS.snoozed, empty: "Nothing snoozed", order: "fixed", dropLabel: "Snooze…", dropIcon: STATE_ICONS.snoozed },
+			{ id: "watching", label: "Watching", icon: STATE_ICONS.watching, empty: "Nothing to watch", order: "fixed", dropLabel: "Watch…", dropIcon: STATE_ICONS.watching },
+		],
+	},
 	{ id: "settled", label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
 ];
 
-/** The groups inside Progressing, one per state, in the order they show. */
-export const SUBGROUPS = {
-	working: { id: "working", label: "Working on it", icon: STATE_ICONS.working },
-	snoozed: { id: "snoozed", label: "Snoozed", icon: STATE_ICONS.snoozed },
-	watching: { id: "watching", label: "Watching", icon: STATE_ICONS.watching },
-};
-
 /** Every section's tasks in table order (a nested group shows where its first task is). */
 const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
-
-/** A row's group: its section, or Progressing and the group for its state inside it. */
-function rowGroup(section: SectionId) {
-	return section === "working" || section === "snoozed" || section === "watching" ? ["working", SUBGROUPS[section]] : section;
-}
 
 function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
@@ -309,7 +308,7 @@ function taskRow(data: Data, task: Task, now: number): Row {
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
 		id: String(task.id),
-		group: task.archived ? undefined : rowGroup(sectionOf(task)),
+		group: task.archived ? undefined : sectionOf(task),
 		unread: task.unread || undefined,
 		// The first cell titles the details drawer.
 		cells: {

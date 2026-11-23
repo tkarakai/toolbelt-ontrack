@@ -28,7 +28,9 @@
       "ui.timeline",
       "ui.row-pane",
       "ui.composer",
-      "assets"
+      "assets",
+      "ui.sub-sections",
+      "ui.toast-key"
     ],
     "optional": [
       "navigate"

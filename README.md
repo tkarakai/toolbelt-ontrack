@@ -15,10 +15,11 @@ keeps room for a real agent later.
 - **Tasks** shows three sections. There is no Pinned section: to keep some tasks in view, give
   them a yes/no label (say, *Pinned*) and filter by it. **Inbox** holds open
   tasks in your order; new tasks and tasks that come back land at the top. **Progressing**
-  holds everything still in motion, in three groups, one per state: **Working on it**, what
+  holds everything still in motion, in three sub-sections, one per state: **Working on it**, what
   you're doing now, in your order; **Snoozed**, hidden until its wake time, soonest first; and
   **Watching**, tasks out of your hands for now, next check-in first (see [Watching](#watching)).
-  No task sits directly under Progressing. **Settled** (done) is a
+  No task sits directly under Progressing; each sub-section shows even when it's empty and
+  collapses on its own. **Settled** (done) is a
   collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
   *Archived* in the toolbar to see them, and *Ongoing* to come back. **New task** is N; once it's saved, the list lands on it.
 - **Keys** follow the [state machine](#states-and-keys): P starts work or brings a task back to
@@ -27,7 +28,8 @@ keeps room for a real agent later.
   and Working on it), and **Delete** is in the ⋯ menu.
 - **Undo** follows every move between states (by key, drag, the drawer's Status or the quick
   view) and every removal: archiving or deleting a task, deleting an update, removing a
-  relation, deleting a label or relation type. It lasts as long as its toast (eight seconds) and
+  relation, deleting a label or relation type. Click it or press ⌘Z (in a text field ⌘Z still
+  undoes your typing). It lasts as long as its toast (eight seconds) and
   reverts only the latest change: a newer change, other than opening a task, withdraws it, so
   Undo never discards work done since. Edits, new tasks and updates, read/unread, unarchiving
   and reordering don't offer it.
@@ -35,8 +37,7 @@ keeps room for a real agent later.
   is the same move as its key and follows the same [state machine](#states-and-keys): into the
   Inbox is P, onto Settled settles, into Snoozed or Watching opens the same dialog as Z or W, and
   a move the keys don't allow (Snoozed straight to Working on it, say) is refused with a hint.
-  A drop just above a group's header belongs to what's above it; a drop at the very end of
-  Progressing joins its last group.
+  A drop lands in the sub-section it's in; a drop on the Progressing header itself starts work.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
   often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
@@ -120,7 +121,7 @@ to from where it is. An archived task doesn't move until it's unarchived (A).
 
 Some tasks aren't done but aren't yours to move right now: you signed up and are waiting for the
 other side to enable it, or something just needs a look once a month. **Watch…** (W, or Watching…
-in the drawer's Status, or a drag into the Watching group) puts a task in Watching, from any section,
+in the drawer's Status, or a drag into the Watching sub-section) puts a task in Watching, from any section,
 Settled included. The Watch dialog asks:
 
 - **Waiting on**: who or what, optional, suggesting the names you used before.
