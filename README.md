@@ -40,14 +40,15 @@ keeps room for a real agent later.
   A drop lands in the sub-section it's in; a drop on the Progressing header itself starts work.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
-  often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
-  task marks it read. Nothing settles on its own.
+  often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Keeping a
+  task open for about two seconds marks it read. Nothing settles on its own.
 - Search matches names, descriptions, updates and label values; each label is a toolbar filter.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
 - The menu-bar **quick view** is a focus list in the table's order: the Inbox, then what you're
-  working on (with elapsed time and its latest update). Each task shows one icon for its state. Without opening the window you can
+  working on (with elapsed time and its latest update). Each task shows one icon for its state;
+  unread tasks are bold with a blue dot, overdue ones have a red dot and a red title, as in the table. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop working (P), add an update (U, then ↵),
   settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
   their dialog in the main window, on the task. Enter opens the task in the main window. The

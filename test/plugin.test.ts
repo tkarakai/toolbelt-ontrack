@@ -5,6 +5,8 @@ import { addTask, seed, type Data } from "../src/model";
 import { ontrack } from "../src/plugin";
 import { STATE_ICONS } from "../src/ui";
 
+/** The tests' wait before a selected task reads (the real one is READ_AFTER_MS). */
+const READ_MS = 100;
 const START = new Date(2026, 10, 14, 12, 0).getTime();
 let clock = START;
 let host: ReturnType<typeof fakeHost> | undefined;
@@ -17,7 +19,7 @@ const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.ri
 
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
-	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => clock }));
+	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => clock, readAfterMs: READ_MS }));
 	host.send({ type: "hello", protocol: 1, capabilities: CAPS, plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.9" } });
 	await until(() => host!.messages.some((m) => m.type === "ready"));
 	for (const surface of ["screen:tasks", "screen:labels", "quick"]) host.send({ type: "open", surface });
@@ -38,6 +40,9 @@ async function until(check: () => boolean, ms = 2000) {
 		await Bun.sleep(5);
 	}
 }
+
+/** Selects a row the way Toolbelt does, without waiting for a reply (selecting renders nothing new). */
+const pick = (rowId: string) => host!.send({ type: "event", surface: "screen:tasks", name: "select", payload: { table: "tasks", rowId } });
 
 const tree = (surface: string): any =>
 	(host!.messages.filter((m): m is Extract<PluginMessage, { type: "render" }> => m.type === "render" && m.surface === surface).at(-1) as any)?.tree as Node;
@@ -96,6 +101,9 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 		{ text: "High", color: "orange", tooltip: "Priority", shade: 1 },
 	]);
 	expect(row.cells.due.tone).toBe("danger");
+	expect(row.cells.name.dot).toEqual({ color: "danger", label: "Overdue" });
+	expect(row.cells.name.tone).toBe("danger");
+	expect(quickList().items.find((i: any) => i.id === "1")).toMatchObject({ dot: { color: "danger", label: "Overdue" }, titleStyle: { color: "danger" } });
 	// Overdue counts for the badge.
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 });
@@ -120,7 +128,14 @@ test("start working, done for now, unread until opened", async () => {
 	expect(row.pane.find((n: any) => n.tone === "muted").text).toContain("25m worked in 1 session");
 	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working on it", tone: "info" });
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
-	await event("select", { table: "tasks", rowId: "2" });
+	// It stays unread for a moment; moving on before then keeps it unread.
+	pick("2");
+	await Bun.sleep(READ_MS / 4);
+	pick("1");
+	await Bun.sleep(READ_MS * 2);
+	expect(rows().find((r) => r.id === "2").unread).toBe(true);
+	pick("2");
+	await until(() => !rows().find((r) => r.id === "2").unread);
 	expect(rows().find((r) => r.id === "2").unread).toBeUndefined();
 	expect(lastBadge()).toEqual({ type: "badge", value: null });
 });
@@ -603,8 +618,8 @@ test("opening a task keeps the Undo, and Undo keeps it read", async () => {
 	d.tasks.find((t) => t.id === 2)!.unread = true;
 	const { event } = await start(d);
 	await event("settle", { rowId: "1" });
-	await event("select", { table: "tasks", rowId: "2" });
-	expect(rows().find((r) => r.id === "2").unread).toBeFalsy();
+	pick("2");
+	await until(() => !rows().find((r) => r.id === "2").unread);
 	await event("undo", undoPayload(), "toast");
 	expect(bySection().settled).toEqual([]);
 	expect(rows().find((r) => r.id === "2").unread).toBeFalsy();

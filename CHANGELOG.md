@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Overdue tasks get a red dot and a red title**, in the table and the quick view; hovering the dot says “Overdue”. In the quick view every dot now sits before the title, the unread one first.
+- **A task reads after about two seconds open**, not right away, so passing over it on the way elsewhere keeps it unread.
+- Requires Toolbelt 0.3.15 (SDK 0.3.10).
 
 ## 0.6.0 — 2026-11-23
 - **Progressing's Working on it, Snoozed and Watching are real sub-sections**: headers like a section's, indented under Progressing, each showing even when empty (“Nothing snoozed”), collapsing on its own and remembering it. A drag lands in the sub-section it's dropped in; a drop on the Progressing header itself starts work. Progressing's open/closed state starts fresh once.

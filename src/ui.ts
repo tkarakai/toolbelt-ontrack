@@ -137,6 +137,9 @@ const taskName = (data: Data, id: number) => {
 /** Overdue: past due and not settled. */
 export const isOverdue = (task: Task, now: number) => !!task.due && task.state !== "settled" && dueAt(task.due) < now;
 
+/** The red dot an overdue task carries before its title (red too in the table), in the table and the quick view. */
+const overdueDot = (task: Task, now: number) => (isOverdue(task, now) ? { color: "danger" as const, label: "Overdue" } : undefined);
+
 /** "Today", "Tomorrow", "Yesterday", "Fri, Nov 20" or "Fri, Nov 20, 2027", with the time after a dot. */
 export function friendlyDue(due: string, now: number): string {
 	const [day, time] = due.split("T") as [string, string?];
@@ -299,7 +302,7 @@ function whenCell(task: Task): Cell {
 	return { text: "", at: task.updated };
 }
 
-/** A task's row in its section; a task brought back by a check-in carries an eye mark. */
+/** A task's row in its section; an overdue one carries a red dot, one brought back by a check-in an eye mark. */
 function taskRow(data: Data, task: Task, now: number): Row {
 	const relations = relationsOf(data, task.id);
 	const marks = [
@@ -314,6 +317,8 @@ function taskRow(data: Data, task: Task, now: number): Row {
 		cells: {
 			name: {
 				text: task.name,
+				dot: overdueDot(task, now),
+				tone: isOverdue(task, now) ? "danger" : undefined,
 				tags: tags(data, task),
 				sub,
 				marks: marks.length ? marks : undefined,
@@ -908,7 +913,8 @@ const latestUpdate = (t: Task) => {
  * The menu-bar quick view: a line to jot a new task into the Inbox (N), then the Inbox and what
  * you're working on, in the table's order. Every task carries one icon, its state's (the table's
  * section or group icon). Each task can be started, stopped, settled, snoozed or given an update
- * (U) without opening the window; ↵ opens it there. Unread tasks are bold; overdue ones get a red dot.
+ * (U) without opening the window; ↵ opens it there. Unread tasks are bold; overdue ones get a red dot
+ * and a red title.
  */
 export function quickView(data: Data, now: number): Node {
 	const waiting = inSection(data, "inbox");
@@ -929,7 +935,8 @@ export function quickView(data: Data, now: number): Node {
 			title: t.name,
 			subtitle,
 			icon: since ? STATE_ICONS.working : STATE_ICONS.inbox,
-			dot: isOverdue(t, now) ? ("danger" as const) : undefined,
+			dot: overdueDot(t, now),
+			titleStyle: isOverdue(t, now) ? { color: "danger" as const } : undefined,
 			...(t.due ? { metaAt: dueAt(t.due) } : {}),
 			unread: t.unread || undefined,
 			actions: since
