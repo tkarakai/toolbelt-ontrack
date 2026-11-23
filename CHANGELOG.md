@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.8.0 — 2026-11-23
 - **Label values have colors of their own.** A text label can draw its values in its color or each in its own. A value's color is chosen when it's added (one the label uses least, never grey), stays through renames and moves, and can be changed from its dot. Colors show on pills, filters, details and in the task editor's value picker, and such a label shows a rainbow dot instead of a color of its own.
 - **A real list editor for label values**, replacing the comma-separated box: add, rename in place, drag or ⌥↑ ⌥↓ to reorder, remove, with how many tasks use each value. Renaming a value renames it on its tasks (or merges it into another of that name); removing one takes it off its tasks, and saving offers Undo.
 - **One list of values.** With Allow free-form values (formerly Allow any text), a value typed on a task joins the label's list instead of living only on tasks. Existing typed values join their lists when you update.
