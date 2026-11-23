@@ -32,6 +32,9 @@ ranges and capabilities accurate. Update the exact public SDK URL and lockfile t
 upgrading tooling; publish compatible SDK/host prerequisites before consuming new functionality.
 Use isolated profiles, temporary homes and disposable resources for smoke tests.
 
+CI and release jobs run on Linux, including the candidate build and its smoke check; only the
+`native` job runs the frozen archive on macOS, the platform its users have, before publication.
+
 Retries accept `--pr <merged-release-PR>` or `--source <merge-SHA>` before tagging.
 The workflow forwards the optional source selector, retains its publisher from the
 trusted workflow commit before checking out a historical source, and serializes
