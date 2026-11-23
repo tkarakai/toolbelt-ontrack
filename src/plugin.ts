@@ -8,7 +8,7 @@ import * as model from "./model";
 import { InvalidInput, type Data, type LabelType } from "./model";
 import { attention, fieldValue, fromTagValues, initialView, quickView, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
-export type Options = { load(): Data; save(data: Data): void; now?: () => number };
+export type Options = { load(): Data; save(data: Data): void; now?: () => number; readAfterMs?: number };
 
 /** Each move's action id and the state it moves the task to (see `actionFor` in ui.ts). */
 const MOVES: Record<string, model.TaskState> = {
@@ -24,10 +24,15 @@ const MOVES: Record<string, model.TaskState> = {
 
 /** How long an Undo stays offered: as long as Toolbelt shows a toast with a button. */
 export const UNDO_MS = 8_000;
+/**
+ * How long a task stays selected before it counts as read. Toolbelt sends `select` once the
+ * selection has rested 400 ms, so a task reads about two seconds after you land on it.
+ */
+export const READ_AFTER_MS = 1_600;
 /** The longest wait between checks, so a sleeping Mac catches up soon after waking. */
 const TICK_MS = 60_000;
 
-export function ontrack({ load, save, now = Date.now }: Options): PluginDefinition {
+export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_MS }: Options): PluginDefinition {
 	let data: Data = model.seed();
 	const view: View = initialView();
 	/**
@@ -38,6 +43,8 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	let undo: { data: Data; until: number; token: number } | undefined;
 	let undoToken = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	/** Marks the selected task read once it has stayed selected; a new selection cancels it. */
+	let reading: ReturnType<typeof setTimeout> | undefined;
 	let context: Context | undefined;
 
 	const badge = (c: Context) => c.badge(attention(data, now()) || null);
@@ -51,6 +58,23 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 			context.invalidate();
 		}
 		schedule();
+	}
+	/**
+	 * Marks a task read once it has stayed selected. Opening a task only marks it read, so a
+	 * standing Undo keeps it read too instead of being withdrawn.
+	 */
+	function markReadLater(id: number) {
+		clearTimeout(reading);
+		reading = setTimeout(() => {
+			const task = data.tasks.find((x) => x.id === id);
+			if (!task?.unread || !context) return;
+			life.markRead(task);
+			const opened = undo?.data.tasks.find((x) => x.id === id);
+			if (opened) life.markRead(opened);
+			save(data);
+			badge(context);
+			context.invalidate();
+		}, readAfterMs);
 	}
 	function schedule() {
 		if (!context || context.mode !== "active") return;
@@ -147,11 +171,11 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				view.dialog = undefined;
 				return false;
 			case "select": {
-				// Opening a task marks it read.
+				// Opening a task marks it read once it has stayed open a moment.
+				clearTimeout(reading);
 				const task = p?.rowId ? data.tasks.find((x) => x.id === rowId()) : undefined;
-				if (!task?.unread) return false;
-				life.markRead(task);
-				return true;
+				if (task?.unread) markReadLater(task.id);
+				return false;
 			}
 			case "reorder": {
 				const id = rowId();
@@ -396,6 +420,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 		prepare: () => ({ ready: true }),
 		stop() {
 			clearTimeout(timer);
+			clearTimeout(reading);
 		},
 		render: {
 			"screen:tasks": () => tasksScreen(data, view, now()),
@@ -411,15 +436,8 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
 				const changed = onEvent(surface, name, payload, c, before);
-				// A later change withdraws the standing Undo, which would discard it. Opening a task
-				// only marks it read, so that's copied into the Undo instead.
-				if (undo && undo === offered && (changed || timed)) {
-					if (name !== "select" || timed) undo = undefined;
-					else {
-						const opened = undo.data.tasks.find((x) => String(x.id) === String((payload as { rowId?: unknown })?.rowId));
-						if (opened) life.markRead(opened);
-					}
-				}
+				// A later change withdraws the standing Undo, which would discard it.
+				if (undo && undo === offered && (changed || timed)) undo = undefined;
 				if (changed || timed) {
 					life.tick(data, now());
 					save(data);

@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- **Overdue tasks get a red dot and a red title in the table**; hovering the dot (here and in the quick view) says “Overdue”.
+- **A task reads after about two seconds open**, not right away, so passing over it on the way elsewhere keeps it unread.
 
 ## 0.6.0 — 2026-11-23
 - **Progressing's Working on it, Snoozed and Watching are real sub-sections**: headers like a section's, indented under Progressing, each showing even when empty (“Nothing snoozed”), collapsing on its own and remembering it. A drag lands in the sub-section it's dropped in; a drop on the Progressing header itself starts work. Progressing's open/closed state starts fresh once.

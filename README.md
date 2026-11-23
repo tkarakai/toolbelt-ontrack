@@ -40,8 +40,8 @@ keeps room for a real agent later.
   A drop lands in the sub-section it's in; a drop on the Progressing header itself starts work.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
-  often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Opening a
-  task marks it read. Nothing settles on its own.
+  often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Keeping a
+  task open for about two seconds marks it read. Nothing settles on its own.
 - Search matches names, descriptions, updates and label values; each label is a toolbar filter.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its

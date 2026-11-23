@@ -22,7 +22,7 @@ each row's `group` is its state's section id. Snoozed and Watching sort themselv
 to working. Undo toasts carry `key: "cmd+z"` (`ui.toast-key`). Saving a new task calls `navigate("tasks", {select})` so the
 list lands on it (optional `navigate` capability). Settings wraps each table in a card
 whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
-read. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
+read after `READ_AFTER_MS` (1.6 s, about 2 s with Toolbelt's 400 ms settle) unless another selection comes first. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
 `ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer), `ui.composer`
 (update boxes, the quick view's New task line and its Add update prompt), `assets` (state
