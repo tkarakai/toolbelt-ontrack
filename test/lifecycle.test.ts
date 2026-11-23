@@ -300,30 +300,13 @@ describe("watching", () => {
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Due now · waiting on Cobra team for less than a day" });
 	});
 
-	test("drops in Progressing find the group inside it from the task they land before", () => {
-		const { d, ids } = setup(["w1", "w2", "s1", "s2", "x1", "x2"]);
-		const [w1, w2, s1, s2, x1, x2] = ids as number[] as [number, number, number, number, number, number];
+	test("a drop's section is its state; a drop on Progressing itself starts work", () => {
+		const { d, ids } = setup(["w1", "s1"]);
+		const [w1, s1] = ids as number[] as [number, number];
+		for (const id of ["inbox", "working", "snoozed", "watching", "settled"]) expect(life.dropSection(id)).toBe(id as life.SectionId);
+		expect(life.dropSection(life.PROGRESSING)).toBe("working");
+		expect(() => life.dropSection("pinned")).toThrow(m.InvalidInput);
 		life.transition(d, w1, "working", {}, NOW);
-		life.transition(d, w2, "working", {}, NOW);
-		life.transition(d, s1, "snoozed", { until: NOW + H }, NOW);
-		life.transition(d, s2, "snoozed", { until: NOW + 2 * H }, NOW);
-		life.transition(d, x1, "watching", { watch: { next: at(20) } }, NOW);
-		life.transition(d, x2, "watching", { watch: { next: at(21) } }, NOW);
-		const where = (before: number | null, moving = 99) => life.dropSection(d, "working", before, moving);
-		expect(where(w1)).toBe("working");
-		expect(where(s1)).toBe("working"); // just above the Snoozed header
-		expect(where(s2)).toBe("snoozed");
-		expect(where(x1)).toBe("snoozed"); // just above the Watching header
-		expect(where(x2)).toBe("watching");
-		expect(where(null)).toBe("watching");
-		expect(life.dropSection(d, "inbox", s1, 99)).toBe("inbox");
-		// Without Watching tasks the end is Snoozed; with neither, Progressing.
-		life.transition(d, x1, "inbox", {}, NOW);
-		life.transition(d, x2, "inbox", {}, NOW);
-		expect(where(null)).toBe("snoozed");
-		life.transition(d, s1, "inbox", {}, NOW);
-		life.transition(d, s2, "inbox", {}, NOW);
-		expect(where(null)).toBe("working");
 		// Reordering within Snoozed is fine; dropping into it from elsewhere isn't.
 		life.transition(d, s1, "snoozed", { until: NOW + H }, NOW);
 		expect(() => life.drop(d, s1, "snoozed", null, NOW)).not.toThrow();

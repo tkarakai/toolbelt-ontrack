@@ -66,7 +66,13 @@ function fixture() {
 
 test("creates a task with the rich fields and saves it on top of the Inbox", async () => {
 	const { saved, event } = await start();
-	expect(table().sections.map((s: any) => s.id)).toEqual(["inbox", "working", "settled"]);
+	expect(table().sections.map((s: any) => s.id)).toEqual(["inbox", "progressing", "settled"]);
+	// Progressing holds one declared sub-section per state; Snoozed and Watching keep their own order.
+	expect(table().sections[1].sections.map((s: any) => [s.id, s.label, s.order])).toEqual([
+		["working", "Working on it", undefined],
+		["snoozed", "Snoozed", "fixed"],
+		["watching", "Watching", "fixed"],
+	]);
 	expect(table()).toMatchObject({ reorder: true, selectEvents: true, appearance: "document" });
 	expect(tree("screen:tasks").actions).toEqual([expect.objectContaining({ id: "new-task", key: "n" })]);
 	await event("new-task");
@@ -124,8 +130,8 @@ test("drag between sections performs the matching transition", async () => {
 	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
 	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
-	// Progressing has no tasks of its own: Working, Snoozed and Watching are groups inside it.
-	expect(rows().find((r) => r.id === "1").group).toEqual(["working", { id: "working", label: "Working on it", icon: STATE_ICONS.working }]);
+	// Progressing has no tasks of its own: rows join the Working on it, Snoozed or Watching sub-section.
+	expect(rows().find((r) => r.id === "1").group).toBe("working");
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	// Dropping into Snoozed asks how long, as Z does; Settled can't be snoozed without P first.
 	await event("reorder", { table: "tasks", rowId: "2", section: "snoozed", before: null });
@@ -486,8 +492,8 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	await event("field", { form: "task", field: "state", value: "watching", rowId: "1" });
 	expect(tree("screen:tasks").dialog.id).toBe("watch");
 	await event("save", { dialog: "watch" });
-	// The host reports a drop into the Watching group as Progressing; the end of it is Watching.
-	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
+	// A drop into the Watching sub-section asks the same.
+	await event("reorder", { table: "tasks", rowId: "2", section: "watching", before: null });
 	expect(tree("screen:tasks").dialog).toMatchObject({ id: "watch", title: "Watch #2 Reply to Anna" });
 	await event("save", { dialog: "watch" });
 	expect(saved.at(-1)!.tasks[1]).toMatchObject({ state: "watching", watch: { every: { n: 1, unit: "week" }, next: nov(27) } });
@@ -548,11 +554,13 @@ test("state icons are the plugin's own monochrome SVGs, declared in the manifest
 test("every move offers Undo, whether by key or drag", async () => {
 	const { event } = await start(fixture());
 	await event("work", { rowId: "1" });
-	expect(toasts().at(-1)).toMatchObject({ text: "Working on #1", action: { id: "undo" } });
+	// ⌘Z presses Undo while its toast shows (ui.toast-key).
+	expect(toasts().at(-1)).toMatchObject({ text: "Working on #1", action: { id: "undo", key: "cmd+z" } });
 	await event("undo", undoPayload(), "toast");
 	expect(bySection().working).toEqual([]);
 	// A drag into another section is the same move, with the same Undo.
-	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
+	// A drop on the Progressing header itself starts work, as a drop into Working on it does.
+	await event("reorder", { table: "tasks", rowId: "2", section: "progressing", before: null });
 	expect(toasts().at(-1)).toMatchObject({ text: "Working on #2", action: { id: "undo" } });
 	await event("done", { rowId: "2" });
 	expect(toasts().at(-1)).toMatchObject({ text: "#2 back in the Inbox", action: { id: "undo" } });

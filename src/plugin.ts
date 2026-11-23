@@ -68,7 +68,7 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 	/** Offers Undo for a change that's easy to make by accident. */
 	function offerUndo(c: Context, text: string, before: Data) {
 		undo = { data: before, until: now() + UNDO_MS, token: ++undoToken };
-		c.toast(text, "default", { id: "undo", label: "Undo", payload: { token: undo.token } });
+		c.toast(text, "default", { id: "undo", label: "Undo", key: "cmd+z", payload: { token: undo.token } });
 	}
 
 	/** What a move offers to undo, by where the task went. */
@@ -157,13 +157,12 @@ export function ontrack({ load, save, now = Date.now }: Options): PluginDefiniti
 				const id = rowId();
 				const task = model.findTask(data, id);
 				const at = p?.before ? Number(p.before) : null;
-				const section = life.dropSection(data, p?.section as life.SectionId, at, id);
+				const section = life.dropSection(String(p?.section));
 				// Within its own section a drop reorders; into another it's that move, like a key.
 				if (section === task.state) {
 					life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
 					return true;
 				}
-				// Inside Progressing, `before` may belong to another group.
 				return moveTo(task, section, c, surface, before, section === "working" || section === "inbox" ? at : null);
 			}
 			case "undo":

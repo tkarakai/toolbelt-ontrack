@@ -229,21 +229,17 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 	return true;
 }
 
+/** The section holding Working on it, Snoozed and Watching; it has no tasks of its own. */
+export const PROGRESSING = "progressing";
+
 /**
- * Where a drop in Progressing lands. Its tasks show in three groups, Working on it, Snoozed and
- * Watching, and the host reports every drop into them as `working`, so `before` tells them
- * apart: before a group's first task ends the group above it, before any other joins its group,
- * and at the very end (`null`) it joins the last group shown. Other sections are as reported.
+ * The state a drop into table section `section` means. Working on it, Snoozed and Watching are
+ * sub-sections reported by their own id; a drop on Progressing itself starts work.
  */
-export function dropSection(data: Data, section: SectionId, before: number | null, moving: number): SectionId {
-	if (section !== "working") return section;
-	const groups = (["working", "snoozed", "watching"] as const)
-		.map((g) => ({ g, ids: inSection(data, g).map((t) => t.id).filter((x) => x !== moving) }))
-		.filter((x) => x.g === "working" || x.ids.length);
-	if (before === null) return groups.at(-1)!.g;
-	const k = groups.findIndex((x) => x.ids.includes(before));
-	if (k < 0) return "working";
-	return k > 0 && groups[k]!.ids[0] === before ? groups[k - 1]!.g : groups[k]!.g;
+export function dropSection(section: string): SectionId {
+	if (section === PROGRESSING) return "working";
+	if (!(STATES as readonly string[]).includes(section)) fail("Unknown section.");
+	return section as SectionId;
 }
 
 /**
