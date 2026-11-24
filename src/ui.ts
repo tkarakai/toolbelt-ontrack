@@ -3,7 +3,7 @@
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { DUE, DUE_BUCKETS, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
-import { colorOf, dueAt, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { BUILT_IN_RELATIONS, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; start?: NewTaskStart; error?: string }
@@ -294,7 +294,6 @@ export function taskActions(now: number): Action[] {
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
 		// In the drawer, R goes to its Related field; otherwise it opens a dialog.
 { id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit", focus: "related" },
-		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
 		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
 		{ id: "mark-read", label: "Mark read", icon: "mail-open", key: "u", group: "edit" },
 		{ id: "indent", label: "Make it a subtask", icon: "indent-increase", key: "alt+right", group: "order" },
@@ -316,12 +315,11 @@ const BACK: Record<Exclude<Task["state"], "inbox">, string> = { working: "done",
 export const actionFor = (task: Task, to: Task["state"]) => (to === "inbox" ? BACK[task.state as Exclude<Task["state"], "inbox">] : MOVE[to]);
 
 /** The action ids a task offers: its moves from `TRANSITIONS` (P, Z, W, S), then the rest. */
-export function actionsFor(data: Data, task: Task): string[] {
+export function actionsFor(task: Task): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
 	const ids = TRANSITIONS[task.state].map((to) => actionFor(task, to));
 	ids.push("edit", "add-update", "relate");
-	if (relationsOf(data, task.id).length) ids.push("unrelate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
 	if (section === "inbox" || section === "working") ids.push("up", "down");
 	ids.push("archive", "delete");
@@ -415,7 +413,6 @@ function whenCell(task: Task): Cell {
  * eye mark, and an archived one, wherever it shows, an archive mark and dimmed text.
  */
 function taskRow(data: Data, task: Task, now: number, group?: string, tree?: RowTree, says: Map<string, string> = groupSays(group)): Row {
-	const relations = relationsOf(data, task.id);
 	const pills = rowTags(data, task, says, now);
 	const marks = [
 		// An archived task outside Archived says so; its Archived pill does when it has one.
@@ -448,14 +445,9 @@ function taskRow(data: Data, task: Task, now: number, group?: string, tree?: Row
 			when: whenCell(task),
 		},
 		pane: taskPane(data, task, now),
-		actions: [...actionsFor(data, task), ...(tree?.under ? ["indent"] : []), ...(tree && parentOf(data, task.id) !== undefined ? ["outdent"] : [])],
-		targets:
-			relations.length || tree?.under
-				? {
-						...(relations.length && { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }),
-						...(tree?.under && { indent: [{ id: String(tree.under.id), label: `Under ${taskName(data, tree.under.id)}`, icon: "indent-increase" }] }),
-					}
-				: undefined,
+		actions: [...actionsFor(task), ...(tree?.under ? ["indent"] : []), ...(tree && parentOf(data, task.id) !== undefined ? ["outdent"] : [])],
+		// Relations are removed from the Related field (its pills' ×).
+		...(tree?.under && { targets: { indent: [{ id: String(tree.under.id), label: `Under ${taskName(data, tree.under.id)}`, icon: "indent-increase" }] } }),
 		...(tree?.children.length && { children: tree.children, open: true }),
 	};
 }
@@ -545,6 +537,60 @@ function watchFacts(task: Task, now: number) {
 		.join(" · ");
 }
 
+/** Following a relation: a Related pill, or an item of the drawer's relation lists, goes to that task. */
+const GO_TO_RELATED: Action = { id: "open-related", label: "Go to this task", icon: "arrow-up-right" };
+const GO_TO_TASK: Action = { id: "open-task", label: "Go to this task", icon: "arrow-up-right" };
+
+/** The list item id of a related task (`rel:<id>`), apart from the table's row ids. */
+export const relatedItemId = (id: number) => `rel:${id}`;
+
+/**
+ * The built-in relations in the drawer, when the task has any: its Parent, Children (with how
+ * many are settled), Blocked by and Blocks, titled with the types' current names. Each task
+ * shows as in the table: state, id, name, labels, due date, unread and overdue dots.
+ */
+function familyCards(data: Data, task: Task, now: number): Node[] {
+	const type = (id: string) => data.relationTypes.find((t) => t.id === id);
+	const parentType = type("parent");
+	const blocksType = type("blocks");
+	const byOrder = (tasks: Task[]) => tableOrder(data).filter((t) => tasks.includes(t));
+	const parent = parentOf(data, task.id);
+	const children = data.tasks.filter((t) => parentOf(data, t.id) === task.id);
+	const blocks = data.tasks.filter((t) => task.relations.some((r) => r.type === "blocks" && r.task === t.id));
+	const blockedBy = data.tasks.filter((t) => t.relations.some((r) => r.type === "blocks" && r.task === task.id));
+	const settled = children.filter((t) => t.state === "settled" || t.archived).length;
+	const cards: [string, string, Task[]][] = [
+		["parent", parentType?.name ?? "Parent", data.tasks.filter((t) => t.id === parent)],
+		["children", `${parentType?.inverse === "Child" ? "Children" : (parentType?.inverse ?? "Children")} · ${settled}/${children.length} settled`, byOrder(children)],
+		["blocked-by", blocksType?.inverse ?? "Blocked by", byOrder(blockedBy)],
+		["blocks", blocksType?.name ?? "Blocks", byOrder(blocks)],
+	];
+	return cards
+		.filter(([, , tasks]) => tasks.length)
+		.map(([id, title, tasks]) => ({
+			type: "card" as const,
+			id: `rel-${id}`,
+			title: id === "children" ? title : `${title} · ${tasks.length}`,
+			children: [{ type: "list" as const, id: `rel-${id}`, open: GO_TO_TASK, items: tasks.map((t) => relatedItem(data, t, now)) }],
+		}));
+}
+
+/** A related task as a list item, with what its table row shows. */
+function relatedItem(data: Data, t: Task, now: number) {
+	const done = t.state === "settled" || t.archived;
+	return {
+		id: relatedItemId(t.id),
+		title: t.name,
+		prefix: { text: `#${t.id}` },
+		icon: t.archived ? "archive" : STATE_ICONS[t.state],
+		tags: [stateTag(t), ...tags(data, t)],
+		dot: overdueDot(t, now),
+		unread: t.unread || undefined,
+		...(isOverdue(t, now) ? { titleStyle: { color: "danger" as const } } : done ? { titleStyle: { color: "muted" as const } } : {}),
+		...(t.due ? { meta: friendlyDue(t.due, now) } : {}),
+	};
+}
+
 /** One quiet line of facts under the properties, when there are any: archived, time spent. */
 function factsLine(task: Task, now: number) {
 	const worked = timeSpent(task, now);
@@ -577,12 +623,14 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 				{ type: "datetime", id: "due", label: isOverdue(task, now) ? "Overdue" : "Due", value: task.due ?? "", placeholder: "No due date" },
 				{ type: "tags", id: "labels", label: "Labels", value: toTagValues(task.labels), keys: tagKeys(data) },
 				// Relations are added like labels: + Add, the relation, then the task.
-				...(data.relationTypes.length ? [{ type: "tags" as const, id: "related", label: "Related", value: relatedEntries(data, task.id).map((e) => e.value), keys: relatedKeys(data, task.id) }] : []),
+				...(data.relationTypes.length ? [{ type: "tags" as const, id: "related", label: "Related", value: relatedEntries(data, task.id).map((e) => e.value), keys: relatedKeys(data, task.id), open: GO_TO_RELATED }] : []),
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
 			],
 		},
 		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
-		...(factsLine(task, now) ? [{ type: "text" as const, text: factsLine(task, now)!, tone: "muted" as const }] : []),
+		// The built-in relations, each a list of its tasks, as rich as their rows; a click goes there.
+...familyCards(data, task, now),
+...(factsLine(task, now) ? [{ type: "text" as const, text: factsLine(task, now)!, tone: "muted" as const }] : []),
 		// When it was made and changed, just above its history.
 		{ type: "text", text: madeLine(task, now), tone: "muted" },
 		{
@@ -762,8 +810,10 @@ export function settingsScreen(data: Data, view: View, now: number): Node {
 						],
 						rows: data.relationTypes.map((t) => ({
 							id: `r${t.id}`,
+							// Built-in types drive behavior: renamed, never deleted.
+							...(isBuiltInRelation(t.id) && { actions: ["edit-relation-type"] }),
 							cells: {
-								name: { text: t.name, sub: t.id },
+								name: { text: t.name, sub: BUILT_IN_RELATIONS.find((b) => b.id === t.id)?.role ?? t.id, ...(isBuiltInRelation(t.id) && { marks: [{ icon: "lock", tooltip: "Built in: it can be renamed, not deleted" }] }) },
 								inverse: t.inverse,
 								uses: data.tasks.reduce((n, task) => n + task.relations.filter((r) => r.type === t.id).length, 0),
 							},

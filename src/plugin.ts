@@ -220,6 +220,13 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 		return true;
 	}
 
+	/** Every row id of the Tasks table, nested rows included. */
+	function rowIds(screen: any): string[] {
+		const table = (screen?.children ?? []).find((n: any) => n?.type === "table" && n.id === "tasks");
+		const walk = (rows: any[]): string[] => rows.flatMap((r) => [r.id, ...walk(r.children ?? [])]);
+		return walk(table?.rows ?? []);
+	}
+
 	/** Returns true when the data changed. */
 	function onEvent(surface: string, name: string, p: any, c: Context, before: Data): boolean {
 		const dialog = view.dialog;
@@ -416,11 +423,17 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			case "relate":
 				view.dialog = { kind: "relate", from: model.findTask(data, rowId()).id, type: data.relationTypes[0]?.id ?? "", to: "" };
 				return false;
-			case "unrelate": {
-				const [holder, type, target] = String(p?.target ?? "").split(":");
-				model.unrelate(data, Number(holder), type ?? "", Number(target), t);
-				offerUndo(c, `Removed the relation between #${holder} and #${target}`, before);
-				return true;
+			// A relation followed from the drawer: select that task in the table.
+			case "open-task":
+			case "open-related": {
+				const id = name === "open-task" ? Number(String(p?.item ?? "").replace(/^rel:/, "")) : relatedId(String(p?.value ?? ""));
+				const task = model.findTask(data, id ?? Number.NaN);
+				// It may show only as a parent standing in another group (`c<id>@<group>`).
+				const shown = rowIds(tasksScreen(data, view, t));
+				const row = shown.find((r) => r === String(task.id)) ?? shown.find((r) => r.startsWith(`c${task.id}@`));
+				if (!row) throw new InvalidInput(`#${task.id} is hidden by the search or filters.`);
+				if (!c.navigate("tasks", { select: row })) throw new InvalidInput(`Find #${task.id} in the list.`);
+				return false;
 			}
 			case "delete":
 				model.deleteTask(data, rowId(), t);
