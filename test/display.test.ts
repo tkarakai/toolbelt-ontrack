@@ -74,7 +74,7 @@ test("Project › Status nests the groups, shows only groups with tasks, and nam
 	const { sections, groupOf } = d.groupTasks(data, tableOrder(data), NOW, LOOKS);
 	const shape = (list: any[]): any[] => list.map((s) => (s.sections ? [s.id, s.label, shape(s.sections)] : [s.id, s.label, s.order ?? "manual"]));
 	expect(shape(sections)).toEqual([
-		["l1=Website", "Website", [["l1=Website/inbox", "Inbox", "manual"], ["l1=Website/progressing", "Progressing", [["l1=Website/working", "Working on it", "manual"]]]]],
+		["l1=Website", "Website", [["l1=Website/inbox", "Inbox", "manual"], ["l1=Website/progressing", "Progressing", [["l1=Website/working", "Working on", "manual"]]]]],
 		["l1=Taxes", "Taxes", [["l1=Taxes/inbox", "Inbox", "manual"]]],
 		["l1=__none", "No Project", [["l1=__none/settled", "Settled", "fixed"]]],
 	]);

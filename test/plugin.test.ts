@@ -74,7 +74,7 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	expect(table().sections.map((s: any) => s.id)).toEqual(["inbox", "progressing", "settled"]);
 	// Progressing holds one declared sub-section per state; Snoozed and Watching keep their own order.
 	expect(table().sections[1].sections.map((s: any) => [s.id, s.label, s.order])).toEqual([
-		["working", "Working on it", undefined],
+		["working", "Working on", undefined],
 		["snoozed", "Snoozed", "fixed"],
 		["watching", "Watching", "fixed"],
 	]);
@@ -82,8 +82,8 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	expect(tree("screen:tasks").actions).toEqual([expect.objectContaining({ id: "new-task", key: "n" })]);
 	await event("new-task");
 	const fields = tree("screen:tasks").dialog.children[0].fields;
-	expect(fields.map((f: any) => f.type)).toEqual(["text", "datetime", "tags", "textarea"]);
-	expect(fields[2].keys.map((k: any) => [k.label, !!k.flag])).toEqual([["Project", false], ["isPersonal", true], ["Priority", false], ["Status", false]]);
+	expect(fields.map((f: any) => [f.id, f.type])).toEqual([["name", "text"], ["state", "select"], ["due", "datetime"], ["labels", "tags"], ["related", "tags"], ["desc", "textarea"]]);
+	expect(fields[3].keys.map((k: any) => [k.label, !!k.flag])).toEqual([["Project", false], ["isPersonal", true], ["Priority", false], ["Status", false]]);
 	await event("field", { form: "task", field: "name", value: "Ship OnTrack" });
 	await event("field", { form: "task", field: "due", value: "2026-11-13" });
 	await event("field", { form: "task", field: "labels", value: [{ key: "3", value: "High" }, { key: "2" }] });
@@ -101,7 +101,9 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 		{ text: "High", color: "orange", tooltip: "Priority", shade: 1 },
 	]);
 	expect(row.cells.due.tone).toBe("danger");
-	expect(row.cells.name.dot).toEqual({ color: "danger", label: "Overdue" });
+	// The overdue dot sits in the row's leading slot, beside the unread dot, not before the title.
+expect(row.dot).toEqual({ color: "danger", label: "Overdue" });
+expect(row.cells.name.dot).toBeUndefined();
 	expect(row.cells.name.tone).toBe("danger");
 	expect(quickList().items.find((i: any) => i.id === "1")).toMatchObject({ dot: { color: "danger", label: "Overdue" }, titleStyle: { color: "danger" } });
 	// Overdue counts for the badge.
@@ -113,8 +115,8 @@ test("start working, done for now, unread until opened", async () => {
 	await event("work", { rowId: "2" });
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 	expect(rows().find((r) => r.id === "2").actions).toContain("done");
-	expect(quickList().items.find((i: any) => i.id === "2")).toMatchObject({ icon: STATE_ICONS.working, subtitle: "Working on it · under a minute" });
-	// The table's order (the Inbox, then Working on it), one state icon each and no working dot.
+	expect(quickList().items.find((i: any) => i.id === "2")).toMatchObject({ icon: STATE_ICONS.working, subtitle: "Working on · under a minute" });
+	// The table's order (the Inbox, then Working on), one state icon each and no working dot.
 	const quick = quickList().items;
 	expect(quick.at(-1).id).toBe("2");
 	expect(quick.map((i: any) => i.icon)).toEqual([...quick.slice(0, -1).map(() => STATE_ICONS.inbox), STATE_ICONS.working]);
@@ -124,9 +126,9 @@ test("start working, done for now, unread until opened", async () => {
 	expect(bySection().inbox[0]).toBe("Reply to Anna");
 	const row = rows().find((r) => r.id === "2");
 	expect(row).toMatchObject({ unread: true });
-	expect(row.cells.name.sub).toBe("Back from Working on it");
+	expect(row.cells.name.sub).toBe("Back from Working on");
 	expect(row.pane.find((n: any) => n.tone === "muted").text).toContain("25m worked in 1 session");
-	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working on it", tone: "info" });
+	expect(row.pane[0]).toMatchObject({ type: "text", text: "New · Back from Working on", tone: "info" });
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 	// It stays unread for a moment; moving on before then keeps it unread.
 	pick("2");
@@ -145,7 +147,7 @@ test("drag between sections performs the matching transition", async () => {
 	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
 	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
-	// Progressing has no tasks of its own: rows join the Working on it, Snoozed or Watching sub-section.
+	// Progressing has no tasks of its own: rows join the Working on, Snoozed or Watching sub-section.
 	expect(rows().find((r) => r.id === "1").group).toBe("working");
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
 	// Dropping into Snoozed asks how long, as Z does; Settled can't be snoozed without P first.
@@ -433,7 +435,15 @@ test("the drawer edits a task in place: name, status, due, labels, description, 
 	const { event, saved } = await start(fixture());
 	const form = () => paneNode("1", "task");
 	expect(form()).toMatchObject({ type: "form", appearance: "inline" });
-	expect(form().fields.map((f: any) => f.id)).toEqual(["name", "state", "due", "labels", "desc"]);
+	expect(form().fields.map((f: any) => f.id)).toEqual(["name", "state", "due", "labels", "related", "desc"]);
+	// The id sits above the title (and before it in the table); when it was made, just above the updates.
+	expect(form().fields[0].note).toBe("#1");
+	expect(rows().find((r) => r.id === "1").cells.name.prefix).toEqual({ text: "#1" });
+	expect(table().columns.map((c: any) => c.key)).toEqual(["name", "due", "when"]);
+	const pane = rows().find((r) => r.id === "1").pane;
+	const updatesAt = pane.findIndex((n: any) => n.id === "updates");
+	expect(pane[updatesAt - 1]).toMatchObject({ type: "text", tone: "muted" });
+	expect(pane[updatesAt - 1].text).toStartWith("Created ");
 	expect(table().enter).toBe("add-update");
 	expect(table().actions.find((a: any) => a.id === "add-update").focus).toBe("update");
 
@@ -449,7 +459,7 @@ test("the drawer edits a task in place: name, status, due, labels, description, 
 	// Status moves it through its lifecycle; Snooze asks until when; Settled offers Undo.
 	await event("field", { form: "task", field: "state", value: "working", rowId: "1" });
 	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("working");
-	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working on it · since");
+	expect(form().fields.find((f: any) => f.id === "state").options[1].label).toStartWith("Working on · since");
 	await event("field", { form: "task", field: "state", value: "snoozed", rowId: "1" });
 	expect(tree("screen:tasks").dialog.id).toBe("snooze");
 	await event("dialog-close", { dialog: "snooze" });
@@ -589,11 +599,11 @@ test("every entry point goes through the state machine: keys, drags, Status and 
 	// Inbox: P work, Z, W, S; the Status picker offers the same states.
 	expect(actions("1").slice(0, 4)).toEqual(["work", "snooze", "watch", "settle"]);
 	expect(states("1")).toEqual(["inbox", "working", "snoozed", "watching", "settled"]);
-	// Snoozed: P wake, Z again, W, S; no Working on it.
+	// Snoozed: P wake, Z again, W, S; no Working on.
 	await event("snooze:tomorrow", { rowId: "1" });
 	expect(actions("1").slice(0, 4)).toEqual(["wake", "snooze", "watch", "settle"]);
 	expect(states("1")).toEqual(["inbox", "snoozed", "watching", "settled"]);
-	// A key, a drag or the Status picker can't jump from Snoozed to Working on it.
+	// A key, a drag or the Status picker can't jump from Snoozed to Working on.
 	for (const send of [
 		() => event("work", { rowId: "1" }),
 		() => event("reorder", { table: "tasks", rowId: "1", section: "working", before: "2" }),
@@ -640,7 +650,7 @@ test("every move offers Undo, whether by key or drag", async () => {
 	await event("undo", undoPayload(), "toast");
 	expect(bySection().working).toEqual([]);
 	// A drag into another section is the same move, with the same Undo.
-	// A drop on the Progressing header itself starts work, as a drop into Working on it does.
+	// A drop on the Progressing header itself starts work, as a drop into Working on does.
 	await event("reorder", { table: "tasks", rowId: "2", section: "progressing", before: null });
 	expect(toasts().at(-1)).toMatchObject({ text: "Working on #2", action: { id: "undo" } });
 	await event("done", { rowId: "2" });
@@ -747,7 +757,7 @@ test("Workflow offers Archived and resets to Ongoing; Due and labels offer their
 	await start(fixture());
 	const [status, due, project, personal] = tree("screen:tasks").filters;
 	expect(status).toMatchObject({ id: "status", label: "Workflow", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
-	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on it", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
+	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
 	expect(due.options.map((o: any) => o.label)).toEqual(["Overdue", "Today", "Next 6 days", "Later", "Past", "No date"]);
 	expect(project.options.at(-1)).toMatchObject({ value: "__none", label: "No Project", count: 3 });
 	expect(personal.options.map((o: any) => o.label)).toEqual(["Yes", "No"]);
@@ -756,15 +766,87 @@ test("Workflow offers Archived and resets to Ongoing; Due and labels offer their
 test("a drag into a label's group sets the value, into Status groups moves too, and one Undo reverts both", async () => {
 	const { event } = await start(fixture());
 	await event("filter-arrange", { order: ["label:3", "status"], grouped: ["label:3", "status"] });
-	// Only tasks' groups show; drag #1 from No Priority › Inbox into High › Working on it.
+	// Only tasks' groups show; drag #1 from No Priority › Inbox into High › Working on.
 	await event("reorder", { table: "tasks", rowId: "1", section: "l3=High/working", before: null });
 	const row = () => rows().find((r) => r.id === "1");
 	expect(row().group).toBe("l3=High/working");
-	expect(row().cells.name.tags.map((t: any) => t.text)).toEqual(["High"]);
+	// The group's header says High and Working on: the row doesn't repeat them.
+	expect(row().cells.name.tags).toEqual([]);
 	expect(table().sections.map((s: any) => s.id)).toEqual(["l3=High", "l3=__none"]);
 	await event("undo", undoPayload(), "toast");
 	expect(row().group).toBe("l3=__none/inbox");
 	expect(row().cells.name.tags).toEqual([]);
+	// Grouped by Priority alone, each row says its state, as a pill before its labels.
+	await event("filter-arrange", { order: ["label:3", "status"], grouped: ["label:3"] });
+	expect(row().cells.name.tags).toEqual([{ text: "Inbox", icon: STATE_ICONS.inbox }]);
+	await event("filter-arrange", { order: ["status", "label:3"], grouped: ["status"] });
+	await event("reorder", { table: "tasks", rowId: "1", section: "inbox", before: null });
+	expect(row().cells.name.tags).toEqual([]);
+});
+
+test("the drawer's Related field adds and removes relations like labels, with Undo", async () => {
+	const { event, saved } = await start(fixture());
+	const related = () => paneNode("2", "task").fields.find((f: any) => f.id === "related");
+	expect(related().keys.find((k: any) => k.key === "parent").values).not.toContain("#2 Reply to Anna");
+	await event("field", { form: "task", field: "related", value: [{ key: "parent", value: "#1 Write spec" }, { key: "relatedTo", value: "#3 Fix login bug" }], rowId: "2" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.relations).toEqual([{ task: 1, type: "parent" }, { task: 3, type: "relatedTo" }]);
+	// #1 sees #2 as its child, under Child.
+	expect(paneNode("1", "task").fields.find((f: any) => f.id === "related").value).toEqual([{ key: "~parent", value: "#2 Reply to Anna" }]);
+	// Removed from #1's side, the relation held by #2 goes.
+	await event("field", { form: "task", field: "related", value: [], rowId: "1" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)!.relations).toEqual([{ task: 3, type: "relatedTo" }]);
+	await event("undo", undoPayload(), "toast");
+	expect(related().value).toEqual([{ key: "parent", value: "#1 Write spec" }, { key: "relatedTo", value: "#3 Fix login bug" }]);
+	// R goes to the Related field in the drawer.
+	expect(table().actions.find((a: any) => a.id === "relate").focus).toBe("related");
+});
+
+test("a new task can start in any state and with relations", async () => {
+	const { saved, event } = await start(fixture());
+	await event("new-task");
+	const field = (id: string) => tree("screen:tasks").dialog.children[0].fields.find((f: any) => f.id === id);
+	expect(field("state").options.map((o: any) => o.value)).toEqual(["inbox", "working", "snoozed", "watching", "settled"]);
+	// Each relation type and its inverse; one parent, several of the rest.
+	expect(field("related").keys.slice(0, 2).map((k: any) => [k.key, k.label, !!k.multiple])).toEqual([["parent", "Parent", false], ["~parent", "Child", true]]);
+	expect(field("related").keys[0].values).toContain("#2 Reply to Anna");
+	await event("field", { form: "task", field: "name", value: "Plan launch" });
+	await event("field", { form: "task", field: "state", value: "working" });
+	await event("field", { form: "task", field: "related", value: [{ key: "parent", value: "#1 Write spec" }, { key: "~parent", value: "#2 Reply to Anna" }, { key: "~parent", value: "#3 Fix login bug" }] });
+	expect(field("related").value).toHaveLength(3);
+	await event("save", { dialog: "task" });
+	const d = saved.at(-1)!;
+	const task = d.tasks.find((t) => t.name === "Plan launch")!;
+	expect(task.state).toBe("working");
+	expect(task.relations).toEqual([{ task: 1, type: "parent" }]);
+	expect(d.tasks.filter((t) => t.relations.some((r) => r.type === "parent" && r.task === task.id)).map((t) => t.id).sort()).toEqual([2, 3]);
+	// Snoozed asks when, on the new task.
+	await event("new-task");
+	await event("field", { form: "task", field: "name", value: "Later" });
+	await event("field", { form: "task", field: "state", value: "snoozed" });
+	await event("save", { dialog: "task" });
+	expect(tree("screen:tasks").dialog).toMatchObject({ id: "snooze" });
+});
+
+test("a label's groups show its values as pills; the drawer ends with buttons", async () => {
+	const d = fixture();
+	d.tasks[0]!.labels[3] = "High";
+	const { event } = await start(d);
+	expect(table().paneButtons).toBe(true);
+	await event("filter-arrange", { order: ["label:3"], grouped: ["label:3"] });
+	const high = table().sections.find((s: any) => s.id === "l3=High");
+	expect(high.pill).toEqual({ color: "orange", shade: 1 });
+	expect(table().sections.find((s: any) => s.id === "l3=__none").pill).toBeUndefined();
+});
+
+test("without Workflow grouping every row says its state; an archived one says Archived instead of a mark", async () => {
+	const { event } = await start(fixture());
+	await event("filter", { filter: "status", values: [] });
+	await event("filter-arrange", { order: [], grouped: [] });
+	const row = (id: string) => rows().find((r) => r.id === id);
+	expect(row("1").cells.name.tags[0]).toEqual({ text: "Inbox", icon: STATE_ICONS.inbox });
+	await event("archive", { rowId: "1" });
+	expect(row("1").cells.name.tags[0]).toEqual({ text: "Archived", icon: "archive" });
+	expect(row("1").cells.name.marks).toBeUndefined();
 });
 
 test("a drag into Today sets the due date; into Later it's refused with a hint", async () => {
@@ -836,7 +918,14 @@ test("staying in their own group, a parent elsewhere shows dimmed above its subt
 	]);
 	// The parent says how far along its subtasks are.
 	expect(rows()[0].cells.name.tags.at(-1)).toMatchObject({ text: "0/2" });
-	expect(rows()[1].actions).toEqual([]);
+	// The context row acts as the task itself: the table lets it be selected, and it carries the
+	// task's actions and drawer (its events come back naming #1).
+	expect(table().contextSelect).toBe(true);
+	expect(rows()[1].actions).toEqual(rows()[0].actions.filter((a: string) => a !== "indent"));
+	expect(rows()[1].pane).toEqual(rows()[0].pane);
+	// The context row says the parent's state as a pill, like a subtask following its parent.
+	expect(rows()[1].cells.name.tags.map((t: any) => t.text)).toEqual(["Inbox", "0/2"]);
+	expect(rows()[1].cells.name.sub).toBeUndefined();
 });
 
 test("following their parent, the family sits with it and subtasks say their own state", async () => {
@@ -844,7 +933,9 @@ test("following their parent, the family sits with it and subtasks say their own
 	d.subtasks = "parent";
 	await start(d);
 	expect(shape(rows())).toEqual([["1", "inbox", null, [["2", null, null, []], ["3", null, null, []]]]]);
-	expect(rows()[0].children[1].cells.name.tags[0]).toMatchObject({ text: "Working on it" });
+	expect(rows()[0].children[1].cells.name.tags[0]).toMatchObject({ text: "Working on" });
+	// #2 is in the Inbox like its group: nothing to say.
+	expect(rows()[0].children[0].cells.name.tags).toEqual([]);
 });
 
 test("⌥→ goes under the task above, ⌥← moves out, a drop onto a task nests it, each with Undo", async () => {

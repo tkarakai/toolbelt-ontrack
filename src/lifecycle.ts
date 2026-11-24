@@ -1,5 +1,5 @@
 // Where tasks are and how they move: one state machine, modeled on T3 Code's thread list. A task
-// is in one state, which is also its section: Inbox, Working on it, Snoozed, Watching or Settled
+// is in one state, which is also its section: Inbox, Working on, Snoozed, Watching or Settled
 // (the middle three shown together under Progressing). Archived is a flag on top. Every change of
 // state goes through `transition`, which allows only the moves in `TRANSITIONS`. You play the
 // agent's part today: starting work is sending the agent a message, Done for now is the agent
@@ -122,18 +122,18 @@ export type TransitionOptions = {
 	watch?: WatchInput;
 	/** Into the Inbox: why it's back, for its unread line (default: where it came from). */
 	reason?: string;
-	/** Into the Inbox or Working on it: the task it goes before (default: the top). */
+	/** Into the Inbox or Working on: the task it goes before (default: the top). */
 	before?: number | null;
 	/** Watching → Inbox because a check-in came due: keep the watch, so W is that check-in. */
 	keepWatch?: boolean;
-	/** Into Working on it: who works on it ("me" today; room for an agent). */
+	/** Into Working on: who works on it ("me" today; room for an agent). */
 	by?: string;
 };
 
 /** The unread reason of a move back to the Inbox, by where it came from. */
 const BACK: Record<TaskState, string> = {
 	inbox: "",
-	working: "Back from Working on it",
+	working: "Back from Working on",
 	snoozed: "Back from Snoozed",
 	watching: "Back from Watching",
 	settled: "Reopened from Settled",
@@ -141,7 +141,7 @@ const BACK: Record<TaskState, string> = {
 
 /**
  * The one way a task changes state. Refuses moves not in `TRANSITIONS` and archived tasks, then:
- * - into Working on it: a work session starts, it's read, and any watch ends;
+ * - into Working on: a work session starts, it's read, and any watch ends;
  * - into the Inbox: unread, saying why; a work session ends; leaving Watching ends the watch
  *   (unless a check-in brought it back, `keepWatch`);
  * - into Snoozed: until `until`; into Watching: the watch (`watchInto`);
@@ -233,7 +233,7 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 
 /**
  * A drag into `section` before task `before`: within its own section it reorders (Inbox,
- * Working on it); into another it's that `transition`. Snoozed and Watching need a time, so a
+ * Working on); into another it's that `transition`. Snoozed and Watching need a time, so a
  * drop into them is refused here; the plugin opens the Snooze or Watch dialog instead.
  */
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {

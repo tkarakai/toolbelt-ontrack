@@ -19,7 +19,7 @@ export const STATUS_VALUES = ["inbox", "working", "snoozed", "watching", "settle
 export type StatusValue = (typeof STATUS_VALUES)[number];
 /** Status starts on everything but Archived: "Ongoing". */
 export const ONGOING: StatusValue[] = ["inbox", "working", "snoozed", "watching", "settled"];
-export const STATUS_LABELS: Record<StatusValue, string> = { inbox: "Inbox", working: "Working on it", snoozed: "Snoozed", watching: "Watching", settled: "Settled", archived: "Archived" };
+export const STATUS_LABELS: Record<StatusValue, string> = { inbox: "Inbox", working: "Working on", snoozed: "Snoozed", watching: "Watching", settled: "Settled", archived: "Archived" };
 /** The states shown together under Progressing. */
 export const PROGRESSING_STATES: StatusValue[] = ["working", "snoozed", "watching"];
 
@@ -161,7 +161,7 @@ const idOfCode = (code: string) => (code === "d" ? DUE : /^l\d+$/.test(code) ? `
 export const PROGRESSING = "progressing";
 
 /** One group's header: its label, icon and how it takes drops. */
-export type GroupLook = Pick<Section, "label" | "icon" | "empty" | "collapsed" | "muted" | "dropLabel" | "dropIcon" | "order">;
+export type GroupLook = Pick<Section, "label" | "icon" | "empty" | "collapsed" | "muted" | "dropLabel" | "dropIcon" | "order" | "pill">;
 
 /** How a group looks, given by the screen (icons and drop names are the UI's to choose). */
 export type Looks = {

@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- **Rows don't repeat their group.** Grouped by a label, a task no longer shows that label's pill; the header already says it.
+- **Workflow state as a pill.** When Workflow isn't grouping, every task shows its state as a pill before its labels. A parent shown dimmed in another group (subtasks staying in their own group) shows its state the same way instead of an "In …" line, and a subtask following its parent shows its state only when it differs from the group's.
+- **Working on it** is now **Working on**.
+- **Move onto a dimmed parent with the keyboard and act on it as the task.** With subtasks staying in their own group, the dimmed parent is no longer skipped: its keys, menu and drawer are the real task's, and while one copy is selected the others and the real task are softly highlighted.
+- **Label groups show their value as its pill**, in the label's colors, the way tasks show it.
+- **IDs move to the name**: a small pill before each task's name replaces the # column, and the drawer shows the ID above the name.
+- **The overdue dot joins the unread dot** to the left of the name, so names line up.
+- **The drawer's actions are buttons at its bottom**: workflow moves first, then editing, ordering and archiving, with Delete apart. The bar and ⋯ menu on top are gone (the row's ⋯ menu remains).
+- **Relations are edited like labels**: the drawer's Related field adds them with + Add (the relation, then a search for the task) and removes them with ×, with Undo. R goes there. When it was created and changed now sits on its own line, just above Updates.
+- **New task** can set where the task starts in the Workflow (Snoozed and Watching ask when on save) and its related tasks.
+- The label editor's fields line up, with "Allow free-form values" wrapping.
 
 ## 0.10.0 — 2026-11-24
 - **Subtasks nest under their parent.** A new **Subtasks** menu after the filters: Off, or a subtask hierarchy where subtasks either **stay in their own group** (a parent that's elsewhere shows dimmed above them, saying where it is) or **follow their parent** (the whole family sits with its top parent, each subtask showing its own state). Saved like the filters.

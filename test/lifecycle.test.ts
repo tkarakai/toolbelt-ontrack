@@ -26,7 +26,7 @@ describe("sections", () => {
 		expect(life.workingSince(m.findTask(d, a))).toBe(NOW);
 		life.transition(d, a, "inbox", {}, NOW + 2 * H);
 		const t = m.findTask(d, a);
-		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working on it"]);
+		expect([t.state, t.unread, t.unreadReason]).toEqual(["inbox", true, "Back from Working on"]);
 		expect(names(d, "inbox")[0]).toBe("a");
 		life.transition(d, a, "working", {}, NOW + 3 * H);
 		expect(t.unread).toBe(false);
@@ -157,7 +157,7 @@ describe("ordering", () => {
 		expect(names(d, "inbox")[0]).toBe("a");
 		expect(() => life.drop(d, a, "snoozed", null, NOW)).toThrow(m.InvalidInput);
 		life.transition(d, a, "snoozed", { until: NOW + H }, NOW);
-		// Strict: Snoozed can't jump to Working on it; P back to the Inbox first.
+		// Strict: Snoozed can't jump to Working on; P back to the Inbox first.
 		expect(() => life.drop(d, a, "working", null, NOW)).toThrow("Bring it back to the Inbox first (P), then start working on it.");
 		life.drop(d, a, "inbox", null, NOW);
 		life.drop(d, a, "working", null, NOW);

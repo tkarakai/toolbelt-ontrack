@@ -14,8 +14,9 @@ The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table (id `tasks`) declares `appearance: "document"`, `selectEvents` and, while
-anything groups, `sections` and `reorder`; New task has key N. The sections come from the filter
+The Tasks table (id `tasks`) declares `appearance: "document"`, `selectEvents`, `paneButtons`
+and, while anything groups, `sections` and `reorder`; New task has key N. Its columns are the
+name (the task id as its `prefix` pill), Due and When. An overdue task's red dot is `Row.dot`. The sections come from the filter
 row (see [Filters and grouping](#filters-and-grouping)): with the default Status grouping they
 are inbox, progressing (no rows of its own; sub-sections working, snoozed, watching), settled and,
 when Archived is shown, archived, with the same ids as before. Each row's `group` is its innermost
@@ -29,9 +30,12 @@ Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-
 (update boxes, the quick view's New task line and its Add update prompt), `assets` (state
 icons), `ui.sub-sections` (Progressing), `ui.toast-key` (⌘Z for Undo), `ui.options-field` (label
 values), `ui.nested-sections` (grouping levels, the dimmed Archived group), `ui.filter-group` (the filter
-row), `ui.row-tree` (subtask rows, context rows, drops onto tasks) and `ui.choice-control` (the
-Subtasks menu). The package is portable JavaScript, uses SDK 0.3.13 and needs Toolbelt 0.3.18 or
-newer.
+row), `ui.row-tree` (subtask rows, context rows, drops onto tasks), `ui.choice-control` (the
+Subtasks menu), `ui.context-select` (context rows act as their task), `ui.section-pill` (label
+groups as pills), `ui.row-dot` (the overdue dot), `ui.pane-buttons` (the drawer's buttons),
+`ui.tag-multiple` (the Related field), `ui.heading-note` (the id above the drawer's name) and
+`ui.cell-prefix` (the id pill before a task's name). The package is portable JavaScript, uses
+SDK 0.3.14 and needs Toolbelt 0.3.19 or newer.
 
 ### Subtasks
 
@@ -39,10 +43,10 @@ A task's parent is the first Parent relation it holds (`parentOf`); `setParent` 
 refusing cycles. `data.subtasks` (`off`, `own`, `parent`) comes from the `subtasks` choice
 control. With subtasks on, `display.forest` turns each group's tasks into a tree: a task under its
 parent, and a parent that isn't in the group as a context node, up to the top. Rows nest as
-`Row.children` (started open); a context row is `c<task>@<group>` with `context: "<task>"`, no
-actions and an "In <state>" line. Following their parent, `placement` puts each shown task in its
-top parent's group (`groupTasks` reads that task's values) and nested rows carry their own state
-as a tag. Parents carry a `settled/total` tag. `indent` (⌥→, its `targets` the task above) and
+`Row.children` (started open); a context row is `c<task>@<group>` with `context: "<task>"` and
+the task's own row (cells, actions, targets, pane) with its state pill always shown. The table's
+`contextSelect` lets it be selected and makes its events name the task. Following their parent, `placement` puts each shown task in its
+top parent's group (`groupTasks` reads that task's values). Parents carry a `settled/total` tag. `indent` (⌥→, its `targets` the task above) and
 `outdent` (⌥←) set the parent; a `reorder` with `onto` (the table's `reorderOnto`) does too. Each
 offers Undo.
 
@@ -68,16 +72,32 @@ selected state at the top of a Status grouping. `LOOKS` in `ui.ts` gives each gr
 icon, collapsed/muted state and drop behavior. `dropTarget` reads a drop's section id back into
 values; `dropInto` in `plugin.ts` sets labels and the due date (only Today or No date can be
 set; other Due groups refuse), then archives (onto Archived), unarchives (out of it) and makes the
-state move through `moveTo`, or reorders within the task's own Inbox or Working on it. One Undo
+state move through `moveTo`, or reorders within the task's own Inbox or Working on. One Undo
 covers the drop. The timer redraws once the day changes, so Due groups move on at midnight.
 
+A row's pills (`rowTags`) leave out what its group's header says (`groupSays`, the group's id
+read back through `dropTarget`; nested rows use their top row's group): its state pill
+(`stateTag`, Archived for an archived task, which then needs no archive mark) shows unless the
+group names that state, and a label's pill unless the group names that value.
+
 Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
-heading, status, due, labels, description), a facts line, a Related section and an Updates
-section with the `update` composer and an editable `updates` timeline. Pane events carry
+heading with the id as its `note`, status, due, labels, related, description), a facts line when
+archived or worked, the created/changed line and an Updates section with the `update` composer
+and an editable `updates` timeline. The row's actions show as buttons below (`paneButtons`), in
+their groups: flow, edit, order, other, then danger (Delete). Pane events carry
 `rowId`; `editInPlace` in `src/plugin.ts` applies form fields (status runs the lifecycle; Snooze
-opens the snooze dialog), `add-update` with `text` adds an update, and `edit-update-text` edits
+opens the snooze dialog; `related` goes to `editRelations`), `add-update` with `text` adds an update, and `edit-update-text` edits
 one. The table's `enter` is `add-update`, whose `focus` is the composer; `edit` focuses the name.
 Both open their dialogs when the host sends them instead (the window too narrow for the drawer).
+
+The Related field (`related`, in the drawer and the New task dialog) is a `tags` field whose keys
+are the relation types and their inverses (`~<type>`), `multiple` except Parent, and whose values
+are tasks as `#<id> <name>` (`relatedKeys`, `relatedEntries`, `relatedId`). `editRelations`
+diffs it: relations it no longer shows are removed (from whichever task holds them), new ones
+are made, one Undo for the change. `relate` focuses it (`focus: "related"`); the Relate dialog
+remains for narrow windows. New task's dialog state carries `start` (`NewTaskStart`: the Workflow
+state and Related values); saving adds the task, relates it, then moves it (Snoozed and Watching
+open their dialog on the new task).
 
 The Updates dialog (id `updates`, view state `{kind: "updates", id, draft, editing?}`) shows a
 composer form (`update-new`) or the update being edited (`update-edit`) above a `timeline` of
@@ -101,7 +121,7 @@ for every move into the Inbox, the watch bookkeeping (`watchInto`), the snooze t
 its relations, and order. The clock (`tick`) and drags (`drop`) call it too.
 
 Each move has one action id, and `actionsFor` derives a row's moves from the table
-(`actionFor`): P is `work` from the Inbox and, back to the Inbox, `done` (Working on it), `wake`
+(`actionFor`): P is `work` from the Inbox and, back to the Inbox, `done` (Working on), `wake`
 (Snoozed), `unwatch` (Watching) and `reopen` (Settled); Z `snooze`, W `watch`, S `settle`. In
 the plugin, every entry point (row actions, drags, the drawer's Status, the quick view) goes
 through `moveTo`: Snoozed and Watching open their dialog (from the quick view, in the main
@@ -117,7 +137,7 @@ Saving moves it to Watching, which counts the check and logs it as an update. Fr
 shows in the main window. A drop into Watching of such a task opens the same dialog.
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
-`focus` list (Inbox, then Working on it, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
+`focus` list (Inbox, then Working on, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
 its only `dot` and its red `titleStyle` mark overdue), whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
 `watch` (W, on tasks back from a check-in; opens the main window), Z also on tasks being worked
 on, and the lifecycle actions.
@@ -171,7 +191,7 @@ started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first ch
 current schedule, the next check-in, the last check and how many there were. Repeats are
 `anchor` plus whole cadences on the local calendar (`addCadence`, month ends clamp), so the day
 and time never drift. No `next` means no reminders. A check-in moves the task to the Inbox but
-keeps `watch`, so watching it again is that check (counted, logged as an update); moving to Working on it or Settled, or P from Watching,
+keeps `watch`, so watching it again is that check (counted, logged as an update); moving to Working on or Settled, or P from Watching,
 deletes it. When a move into Watching gets a date on the old schedule (same cadence), it keeps `anchor`; any
 other date becomes the new `anchor`.
 
