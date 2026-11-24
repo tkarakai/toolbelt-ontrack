@@ -198,8 +198,10 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	expect(four.schema).toBe(4);
 	expect(() => m.upgrade3to4(four)).toThrow(m.InvalidInput);
 	const five = m.upgrade4to5(four);
-	expect(m.parseData(JSON.parse(JSON.stringify(five)))).toEqual(JSON.parse(JSON.stringify(five)));
 	expect(() => m.upgrade4to5(five)).toThrow(m.InvalidInput);
+	const six = m.upgrade5to6(five);
+	expect(m.parseData(JSON.parse(JSON.stringify(six)))).toEqual(JSON.parse(JSON.stringify(six)));
+	expect(() => m.upgrade5to6(six)).toThrow(m.InvalidInput);
 	expect(four.order).toEqual({ inbox: [1], working: [] });
 	expect(four.tasks.some((t: any) => "pinned" in t)).toBe(false);
 	expect(four.labels).toEqual(three.labels); // nothing was pinned, so no label
@@ -301,7 +303,7 @@ test("schema 4 → 5: values get colors; typed values join free-text labels afte
 		],
 	};
 	const five = m.upgrade4to5(four, () => 0);
-	expect(five.schema).toBe(m.SCHEMA);
+	expect(five.schema).toBe(5);
 	const [project, flag, priority] = five.labels;
 	expect(project!.values.map((v) => v.text)).toEqual(["Toolbelt", "Attic", "Garden"]);
 	expect(new Set(project!.values.map((v) => v.color)).size).toBe(3);

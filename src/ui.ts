@@ -1,7 +1,8 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
-import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Section, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, PROGRESSING, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { DUE, DUE_BUCKETS, filterValues, groupedLevels, groupTasks, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
 import { colorOf, dueAt, nextValueColor, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -61,11 +62,9 @@ export type UpdateDraft = { update: number; text: string; added: string; updated
 
 export const updateDraft = (u: Update, closeAfter?: boolean): UpdateDraft => ({ update: u.id, text: u.text, added: toLocalInput(u.added), updated: toLocalInput(u.updated), ...(closeAfter && { closeAfter }) });
 
+/** What lives only in memory: the search and an open dialog. Filters and grouping are saved with the data. */
 export type View = {
 	query: string;
-	/** Filter id → selected option values. */
-	filters: Record<string, string[]>;
-	show: "active" | "archived";
 	dialog?: Dialog;
 };
 
@@ -126,7 +125,7 @@ export function setRepeat(dialog: WatchDialog, repeat: string, now: number) {
 	if (!dialog.nextSet) dialog.next = toLocalInput(defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every));
 }
 
-export const initialView = (): View => ({ query: "", filters: {}, show: "active" });
+export const initialView = (): View => ({ query: "" });
 
 const NONE = "__none";
 
@@ -159,17 +158,13 @@ export function spent(ms: number) {
 	return h ? `${h}h ${minutes % 60}m` : `${minutes}m`;
 }
 
-const optionValue = (value: string | boolean) => (value === true ? "yes" : String(value));
-
-const filterOptions = (label: Label): string[] => (label.type === "bool" ? ["yes"] : label.values.map((v) => v.text));
-
 const taskName = (data: Data, id: number) => {
 	const task = data.tasks.find((t) => t.id === id);
 	return task ? `#${id} ${task.name}` : `#${id}`;
 };
 
-/** Overdue: past due and not settled. */
-export const isOverdue = (task: Task, now: number) => !!task.due && task.state !== "settled" && dueAt(task.due) < now;
+/** Overdue: past due and still open (not settled or archived). */
+export const isOverdue = (task: Task, now: number) => !!task.due && task.state !== "settled" && !task.archived && dueAt(task.due) < now;
 
 /** The red dot an overdue task carries before its title (red too in the table), in the table and the quick view. */
 const overdueDot = (task: Task, now: number) => (isOverdue(task, now) ? { color: "danger" as const, label: "Overdue" } : undefined);
@@ -197,12 +192,8 @@ export function stamp(ms: number, now: number) {
 /** What the plugin badge counts: open tasks that are unread or overdue. */
 export const attention = (data: Data, now: number) => data.tasks.filter((t) => !t.archived && t.state !== "settled" && (t.unread || isOverdue(t, now))).length;
 
-function matches(data: Data, view: View, task: Task, s: ReturnType<typeof search>) {
-	for (const [id, values] of Object.entries(view.filters)) {
-		if (!values.length) continue;
-		const value = task.labels[id.slice("label:".length)];
-		if (value === undefined || !values.includes(optionValue(value))) return false;
-	}
+/** Whether the task matches the search (filters are `passes` in display.ts). */
+function matches(data: Data, task: Task, s: ReturnType<typeof search>) {
 	return s.test([`#${task.id}`, task.name, task.desc, task.watch?.on ?? "", ...task.updates.map((u) => u.text), ...tags(data, task).map((t) => t.text)]);
 }
 
@@ -284,29 +275,40 @@ export const STATE_ICONS = {
 };
 
 /**
- * The table's sections. Progressing has no tasks of its own: its tasks show in three
- * sub-sections (`ui.sub-sections`), Working on it, Snoozed and Watching, everything still in
- * motion. Each takes drops as its own move; a drop on Progressing itself starts work.
+ * How each group looks and takes drops. Status groups are the states' sections, as before:
+ * Progressing holds Working on it, Snoozed and Watching (a drop on it starts work), Settled starts
+ * collapsed, and Archived, the last, starts collapsed and dimmed. A drop into a label's group sets
+ * that value (into its No group clears it); into Today or No date sets or clears the due date.
  */
-export const SECTIONS: Section[] = [
-	{ id: "inbox", label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
-	{
-		id: PROGRESSING,
-		label: "Progressing",
-		icon: STATE_ICONS.progressing,
-		dropLabel: "Start working on it",
-		dropIcon: STATE_ICONS.working,
-		sections: [
-			{ id: "working", label: "Working on it", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
-			{ id: "snoozed", label: "Snoozed", icon: STATE_ICONS.snoozed, empty: "Nothing snoozed", order: "fixed", dropLabel: "Snooze…", dropIcon: STATE_ICONS.snoozed },
-			{ id: "watching", label: "Watching", icon: STATE_ICONS.watching, empty: "Nothing to watch", order: "fixed", dropLabel: "Watch…", dropIcon: STATE_ICONS.watching },
-		],
+export const LOOKS: Looks = {
+	status: (value) =>
+		(({
+			inbox: { label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
+			progressing: { label: "Progressing", icon: STATE_ICONS.progressing, dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+			working: { label: "Working on it", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+			snoozed: { label: "Snoozed", icon: STATE_ICONS.snoozed, empty: "Nothing snoozed", order: "fixed", dropLabel: "Snooze…", dropIcon: STATE_ICONS.snoozed },
+			watching: { label: "Watching", icon: STATE_ICONS.watching, empty: "Nothing to watch", order: "fixed", dropLabel: "Watch…", dropIcon: STATE_ICONS.watching },
+			settled: { label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
+			archived: { label: "Archived", icon: "archive", collapsed: true, muted: true, order: "fixed", dropLabel: "Archive", dropIcon: "archive" },
+		}) satisfies Record<StatusValue | "progressing", GroupLook>)[value],
+	due: (bucket) => {
+		const label = DUE_BUCKETS.find((b) => b.id === bucket)!.label;
+		const icon = { overdue: "alarm-clock", today: "calendar-check", next6: "calendar-days", later: "calendar", past: "history", none: "calendar-off" }[bucket];
+		// Only Today and No date name one due date a drop can set.
+		if (bucket === "today") return { label, icon, order: "fixed", dropLabel: "Due today", dropIcon: icon };
+		if (bucket === "none") return { label, icon, order: "fixed", dropLabel: "Clear the due date", dropIcon: icon };
+		return { label, icon, order: false };
 	},
-	{ id: "settled", label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
-];
+	label: (label, value) => {
+		const none = value === NO_VALUE;
+		const name = label.type === "bool" ? (none ? `Not ${label.name}` : label.name) : none ? `No ${label.name}` : value;
+		return { label: name, order: "fixed", dropLabel: none ? `Clear ${label.name}` : label.type === "bool" ? label.name : `${label.name}: ${value}`, dropIcon: label.type === "bool" ? "toggle-left" : "tag" };
+	},
+};
 
-/** Every section's tasks in table order (a nested group shows where its first task is). */
+/** Every task in table order: each state's in its own order, then archived ones, newest first. */
 const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
+export const tableOrder = (data: Data) => [...HOME_ORDER.flatMap((id) => inSection(data, id)), ...data.tasks.filter((t) => t.archived).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0) || b.id - a.id)];
 
 function dueCell(task: Task, now: number): Cell {
 	if (!task.due) return null;
@@ -336,23 +338,27 @@ function whenCell(task: Task): Cell {
 	return { text: "", at: task.updated };
 }
 
-/** A task's row in its section; an overdue one carries a red dot, one brought back by a check-in an eye mark. */
-function taskRow(data: Data, task: Task, now: number): Row {
+/**
+ * A task's row in its group; an overdue one carries a red dot, one brought back by a check-in an
+ * eye mark, and an archived one, wherever it shows, an archive mark and dimmed text.
+ */
+function taskRow(data: Data, task: Task, now: number, group?: string): Row {
 	const relations = relationsOf(data, task.id);
 	const marks = [
+		...(task.archived ? [{ icon: "archive", tooltip: "Archived" }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
 	return {
 		id: String(task.id),
-		group: task.archived ? undefined : sectionOf(task),
+		group,
 		unread: task.unread || undefined,
 		// The first cell titles the details drawer.
 		cells: {
 			name: {
 				text: task.name,
 				dot: overdueDot(task, now),
-				tone: isOverdue(task, now) ? "danger" : undefined,
+				tone: isOverdue(task, now) ? "danger" : task.archived ? "muted" : undefined,
 				tags: tags(data, task),
 				sub,
 				marks: marks.length ? marks : undefined,
@@ -472,55 +478,62 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 	];
 }
 
+/** "Grouping goes 10 levels deep at most": why a filter can't start grouping now. */
+const DEPTH_LIMIT = `Grouping goes ${MAX_LEVELS} levels deep at most`;
+
+/** One filter of the toolbar row, with counts of the tasks the other filters and the search leave. */
+function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Filter {
+	const counts = new Map<string, number>();
+	for (const t of pool) {
+		if (!passes(data, t, now, f.id)) continue;
+		const v = valueOf(data, f.id, t, now);
+		counts.set(v, (counts.get(v) ?? 0) + 1);
+	}
+	const values = filterValues(data, f.id);
+	const grouping = { group: f.group, ...(!f.group && groupedLevels(data.filters) + levelsOf(f.id) > MAX_LEVELS && { groupDisabled: DEPTH_LIMIT }) };
+	if (f.id === STATUS)
+		return { id: f.id, label: "Status", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0 })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
+	if (f.id === DUE)
+		return { id: f.id, label: "Due", icon: "calendar", options: values.map((v) => ({ value: v, label: DUE_BUCKETS.find((b) => b.id === v)!.label, count: counts.get(v) ?? 0 })), selected: f.selected, ...grouping };
+	const label = data.labels.find((l) => `label:${l.id}` === f.id)!;
+	return {
+		id: f.id,
+		label: label.name,
+		icon: label.type === "bool" ? "toggle-left" : "tag",
+		options: values.map((value) => ({
+			value,
+			label: value === NO_VALUE ? (label.type === "bool" ? "No" : `No ${label.name}`) : value === YES && label.type === "bool" ? "Yes" : value,
+			...(value !== NO_VALUE && { dot: label.type === "bool" ? label.color : colorOf(label, value) }),
+			count: counts.get(value) ?? 0,
+		})),
+		selected: f.selected,
+		...grouping,
+	};
+}
+
 export function tasksScreen(data: Data, view: View, now: number): Node {
 	const s = search(view.query);
-	const archived = view.show === "archived";
-	const pool = data.tasks.filter((t) => t.archived === archived);
-	const ordered = archived ? [...pool].sort((a, b) => b.updated - a.updated) : HOME_ORDER.flatMap((id) => inSection(data, id));
-	const shown = ordered.filter((t) => matches(data, view, t, s));
-	const filters: Filter[] = data.labels.map((label) => {
-		const counts = new Map<string, number>();
-		for (const t of pool) {
-			const v = t.labels[label.id];
-			if (v !== undefined) counts.set(optionValue(v), (counts.get(optionValue(v)) ?? 0) + 1);
-		}
-		return {
-			id: `label:${label.id}`,
-			label: label.name,
-			icon: label.type === "bool" ? "toggle-left" : "tag",
-			options: filterOptions(label).map((value) => ({ value, label: label.type === "bool" ? "Yes" : value, dot: label.type === "bool" ? label.color : colorOf(label, value), count: counts.get(value) ?? 0 })),
-			selected: view.filters[`label:${label.id}`] ?? [],
-		};
-	});
+	// The search narrows everything, the filters' counts included.
+	const pool = tableOrder(data).filter((t) => matches(data, t, s));
+	const shown = pool.filter((t) => passes(data, t, now));
+	const { sections, groupOf } = groupTasks(data, shown, now, LOOKS);
+	const filters = data.filters.map((f) => filterNode(data, f, pool, now));
 	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
 	const watching = data.tasks.filter((t) => !t.archived && t.state === "watching").length;
 	const unread = open.filter((t) => t.unread).length;
-	const summary = archived
-		? `${shown.length} archived`
-		: `${open.length} open${watching ? ` · ${watching} watching` : ""}${unread ? ` · ${unread} unread` : ""}${shown.length !== ordered.length ? ` · showing ${shown.length}` : ""}`;
+	const ongoing = data.tasks.filter((t) => !t.archived).length;
+	const summary = `${open.length} open${watching ? ` · ${watching} watching` : ""}${unread ? ` · ${unread} unread` : ""}${shown.length !== ongoing ? ` · showing ${shown.length}` : ""}`;
 	return {
 		type: "page",
 		search: { placeholder: "Search tasks" },
 		summary,
 		highlight: s.highlight(),
 		filters,
-		controls: [
-			{
-				type: "segmented",
-				id: "show",
-				label: "Show",
-				value: view.show,
-				options: [
-					{ value: "active", label: "Ongoing", icon: "list-checks" },
-					{ value: "archived", label: "Archived", icon: "archive", tooltip: "Archived tasks, newest first" },
-				],
-			},
-		],
 		actions: [{ id: "new-task", label: "New task", icon: "plus", primary: true, key: "n" }],
 		children: [
 			{
 				type: "table",
-				id: archived ? "archived" : "tasks",
+				id: "tasks",
 				columns: [
 					// The first column titles the details drawer, so it's the name.
 					{ key: "name", title: "Task", grow: true },
@@ -529,15 +542,13 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 					{ key: "when", title: "When", width: 120, priority: 3 },
 				],
 				appearance: "document",
-				...(archived ? {} : { sections: SECTIONS, reorder: true }),
+				...(sections.length && { sections, reorder: true }),
 				selectEvents: true,
 				// ↵ on a task writes an update in its drawer.
 				enter: "add-update",
-				rows: shown.map((t) => taskRow(data, t, now)),
+				rows: shown.map((t) => taskRow(data, t, now, groupOf.get(t.id))),
 				actions: taskActions(now),
-				empty: archived
-					? { title: "Nothing archived", description: "Archive tasks you want out of sight but not deleted.", icon: "archive" }
-					: data.tasks.length
+				empty: data.tasks.length
 						? { title: "No matching tasks", description: "Change the search or filters.", icon: "search-x" }
 						: { title: "No tasks yet", description: "Create one with New task (N).", icon: "list-checks" },
 			},

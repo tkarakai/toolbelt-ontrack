@@ -3,6 +3,7 @@
 // tasks, brings watched tasks back for their check-ins and announces due dates; probe mode
 // starts no timers.
 import { HUES, type Context, type Hue, type PluginDefinition } from "@toolbelt/sdk";
+import * as display from "./display";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data } from "./model";
@@ -46,6 +47,10 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	/** Marks the selected task read once it has stayed selected; a new selection cancels it. */
 	let reading: ReturnType<typeof setTimeout> | undefined;
 	let context: Context | undefined;
+	/** The filter row changed: saved, but not a change Undo needs to give way to. */
+	let viewChanged = false;
+	/** The day the list was last drawn for: due groups move on at midnight. */
+	let drawnDay = new Date(now()).toDateString();
 
 	const badge = (c: Context) => c.badge(attention(data, now()) || null);
 
@@ -56,7 +61,8 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 			save(data);
 			badge(context);
 			context.invalidate();
-		}
+		} else if (context && new Date(now()).toDateString() !== drawnDay) context.invalidate();
+		drawnDay = new Date(now()).toDateString();
 		schedule();
 	}
 	/**
@@ -123,6 +129,57 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	}
 
 	/**
+	 * A drag into a group: the drop means every value along the group's path. Labels and the due
+	 * date change first; then Archived archives (out of it unarchives), and a state is that move,
+	 * like its key (`moveTo`, so Snoozed and Watching open their dialog). Within the task's own
+	 * Inbox or Working on it the drop reorders. One Undo covers it all.
+	 */
+	function dropInto(task: model.Task, section: string, at: number | null, c: Context, surface: string, before: Data): boolean {
+		const t = now();
+		const target = display.dropTarget(section);
+		if (!target.size) throw new InvalidInput("Group the list to move tasks by dragging.");
+		const labels = { ...task.labels };
+		let due = task.due ?? "";
+		let edited = false;
+		for (const [id, value] of target) {
+			if (id === display.STATUS || value === display.valueOf(data, id, task, t)) continue;
+			if (id === display.DUE) {
+				if (value === "today") {
+					const d = new Date(t);
+					const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+					due = due.includes("T") ? `${day}${due.slice(10)}` : day;
+				} else if (value === "none") due = "";
+				else throw new InvalidInput("Set its due date in the details to move it there.");
+			} else {
+				const label = data.labels.find((l) => display.labelFilterId(l) === id);
+				if (!label) throw new InvalidInput("That label no longer exists.");
+				if (value === display.NO_VALUE) delete labels[label.id];
+				else labels[label.id] = label.type === "bool" ? true : value;
+			}
+			edited = true;
+		}
+		if (edited) model.updateTask(data, task.id, { name: task.name, due, desc: task.desc, labels }, t);
+		const wasArchived = task.archived;
+		const status = target.get(display.STATUS);
+		if (status === "archived") {
+			if (!wasArchived) life.archive(data, task.id, t);
+			if (!wasArchived || edited) offerUndo(c, wasArchived ? `Moved #${task.id}` : `Archived #${task.id}`, before);
+			return !wasArchived || edited;
+		}
+		const to = status === undefined ? undefined : display.stateOf(status);
+		// Out of Archived into a state: unarchived first, then that move.
+		if (wasArchived && to) life.unarchive(data, task.id, t);
+		const place = to === "inbox" || to === "working" ? at : null;
+		if (!to || to === task.state) {
+			// Its own state: a drop reorders Inbox and Working on it.
+			if (to) life.drop(data, task.id, to, place, t);
+			if (edited || (wasArchived && to)) offerUndo(c, wasArchived && to ? `Unarchived #${task.id}` : `Moved #${task.id}`, before);
+			return true;
+		}
+		return moveTo(task, to, c, surface, before, place) || edited || wasArchived;
+	}
+
+	/**
 	 * A field of the drawer's property sheet. Status moves the task (`moveTo`); the rest saves
 	 * through the same checks as the Edit dialog.
 	 */
@@ -164,8 +221,18 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 			case "search":
 				view.query = String(p?.query ?? "");
 				return false;
+			// The filter row is saved with the data, but it's a view: it doesn't withdraw Undo.
 			case "filter":
-				view.filters[String(p?.filter)] = Array.isArray(p?.values) ? p.values.map(String) : [];
+				display.setSelection(data, String(p?.filter), p?.values);
+				viewChanged = true;
+				return false;
+			case "filter-arrange":
+				try {
+					display.arrange(data, p?.order, p?.grouped);
+				} catch (e) {
+					throw new InvalidInput((e as Error).message);
+				}
+				viewChanged = true;
 				return false;
 			case "dialog-close":
 				view.dialog = undefined;
@@ -177,29 +244,20 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 				if (task?.unread) markReadLater(task.id);
 				return false;
 			}
-			case "reorder": {
-				const id = rowId();
-				const task = model.findTask(data, id);
-				const at = p?.before ? Number(p.before) : null;
-				const section = life.dropSection(String(p?.section));
-				// Within its own section a drop reorders; into another it's that move, like a key.
-				if (section === task.state) {
-					life.drop(data, id, section, section === "working" || section === "inbox" ? at : null, t);
-					return true;
-				}
-				return moveTo(task, section, c, surface, before, section === "working" || section === "inbox" ? at : null);
-			}
+			case "reorder":
+				return dropInto(model.findTask(data, rowId()), String(p?.section ?? ""), p?.before ? Number(p.before) : null, c, surface, before);
 			case "undo":
 				if (!undo || undo.until < t || p?.token !== undo.token) throw new InvalidInput(undo && undo.until >= t ? "Only the latest change can be undone." : "Too late to undo.");
-				data = undo.data;
+				// Undo reverts the change, not filtering or grouping chosen since.
+				data = { ...undo.data, filters: data.filters };
+				data.filters = display.normalizeFilters(data);
 				undo = undefined;
 				return true;
 			case "field": {
 				const value = fieldValue(p?.value);
 				// The details drawer edits the task in place: each field saves on its own.
 				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, before);
-				if (p?.form === "show") view.show = value === "archived" ? "archived" : "active";
-				else if (dialog?.kind === "task" && p?.form === "task") {
+				if (dialog?.kind === "task" && p?.form === "task") {
 					if (p.field === "labels") dialog.draft.labels = fromTagValues(Array.isArray(value) ? value : []);
 					else if (p.field === "name" || p.field === "due" || p.field === "desc") dialog.draft[p.field as "name"] = String(value);
 				} else if (dialog?.kind === "relate" && p?.form === "relate") {
@@ -447,7 +505,10 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 			try {
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
+				viewChanged = false;
 				const changed = onEvent(surface, name, payload, c, before);
+				// Labels come and go; the filter row follows them.
+				data.filters = display.normalizeFilters(data);
 				// A later change withdraws the standing Undo, which would discard it.
 				if (undo && undo === offered && (changed || timed)) undo = undefined;
 				if (changed || timed) {
@@ -455,7 +516,7 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 					save(data);
 					badge(c);
 					schedule();
-				}
+				} else if (viewChanged) save(data);
 			} catch (e) {
 				data = before;
 				undo = offered;

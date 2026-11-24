@@ -7,27 +7,55 @@ rendering, plugin installation, the runtime process and managed-data recovery.
 
 Toolbelt launches the bundled `index.js` with Bun. The plugin uses the public `@toolbelt/sdk`
 package over JSON lines on stdin/stdout; stderr is diagnostic output. UI is a declarative tree;
-Toolbelt keeps selection, typing, scroll and drag feedback. Dialog drafts, search, filters, the
-Ongoing/Archived choice and the Undo snapshot live in plugin memory and reset on restart.
+Toolbelt keeps selection, typing, scroll and drag feedback. Dialog drafts, search and the Undo
+snapshot live in plugin memory and reset on restart; the filter row is saved with the data.
 
 The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and `labels` (titled
 Settings, shortcut S; the id stays `labels`),
 plus the `quick` surface. Task row ids are the task id as a string on both the table and the quick
 list, so selection hands off between them. Label rows are `l<id>`, relation type rows `r<id>`.
-The Tasks table declares `appearance: "document"`, `sections` (inbox, progressing, settled),
-`reorder` and `selectEvents`; New task has key N. Progressing has no rows of its own: it declares
-the sub-sections working (titled Working on it), snoozed and watching (`ui.sub-sections`), and
-each row's `group` is its state's section id. Snoozed and Watching sort themselves (`order:
-"fixed"`). A drop reports the sub-section's id; `dropSection` maps a drop on Progressing itself
-to working. Undo toasts carry `key: "cmd+z"` (`ui.toast-key`). Saving a new task calls `navigate("tasks", {select})` so the
+The Tasks table (id `tasks`) declares `appearance: "document"`, `selectEvents` and, while
+anything groups, `sections` and `reorder`; New task has key N. The sections come from the filter
+row (see [Filters and grouping](#filters-and-grouping)): with the default Status grouping they
+are inbox, progressing (no rows of its own; sub-sections working, snoozed, watching), settled and,
+when Archived is shown, archived, with the same ids as before. Each row's `group` is its innermost
+section's id. Snoozed, Watching, Settled, Archived and label groups sort themselves (`order:
+"fixed"`). Undo toasts carry `key: "cmd+z"` (`ui.toast-key`). Saving a new task calls `navigate("tasks", {select})` so the
 list lands on it (optional `navigate` capability). Settings wraps each table in a card
-whose action creates its kind of row. A `reorder` event becomes a lifecycle transition; a `select` event marks the task
+whose action creates its kind of row. A `reorder` event becomes `dropInto` (below); a `select` event marks the task
 read after `READ_AFTER_MS` (1.6 s, about 2 s with Toolbelt's 400 ms settle) unless another selection comes first. Required capabilities are `ui.core`, `ui.action-key`, `lifecycle`, `ui.split-action` (the
 Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-keys` and
 `ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer), `ui.composer`
 (update boxes, the quick view's New task line and its Add update prompt), `assets` (state
-icons), `ui.sub-sections` (Progressing) and `ui.toast-key` (⌘Z for Undo). The package is portable
-JavaScript, uses SDK 0.3.10 and needs Toolbelt 0.3.15 or newer.
+icons), `ui.sub-sections` (Progressing), `ui.toast-key` (⌘Z for Undo), `ui.options-field` (label
+values), `ui.nested-sections` (grouping levels, the dimmed Archived group) and `ui.filter-group`
+(the filter row). The package is portable JavaScript, uses SDK 0.3.12 and needs Toolbelt 0.3.17
+or newer.
+
+### Filters and grouping
+
+`data.filters` is the toolbar's filter row in order: `{id, group, selected}` for `status`, `due`
+and `label:<id>`, grouping ones first. `src/display.ts` (pure) owns it: `normalizeFilters` keeps
+it in step with the labels (run on load and after every event), `setSelection` and `arrange`
+apply `filter` and `filter-arrange` events, and `arrange` refuses more than `MAX_LEVELS` (10)
+levels, Status counting two for Progressing. `ui.ts` sends each filter with faceted counts (the
+search and the other filters applied), `groupDisabled` once it couldn't fit, and Status's
+`default` (Ongoing: every state but archived). Filter values are Status values (the five states
+and `archived`), Due buckets (`overdue` open tasks past due, `today`, `next6`, `later`, `past`
+finished tasks, `none`; `dueBucket`) and label values, with `__none` for no value and `yes` for a
+yes/no label. Filter events save the data but don't withdraw a standing Undo, and Undo keeps the
+current filter row.
+
+`groupTasks` nests the shown tasks (`tableOrder`: each state's order, then archived newest
+first) by the grouping filters. A section's id is its path of segments joined by `/`: a Status
+value as is (`inbox`; Progressing's states don't include `progressing`), `d=<bucket>` for Due and
+`l<id>=<value>` (URI-encoded) for a label. Only groups with tasks are declared, except each
+selected state at the top of a Status grouping. `LOOKS` in `ui.ts` gives each group its label,
+icon, collapsed/muted state and drop behavior. `dropTarget` reads a drop's section id back into
+values; `dropInto` in `plugin.ts` sets labels and the due date (only Today or No date can be
+set; other Due groups refuse), then archives (onto Archived), unarchives (out of it) and makes the
+state move through `moveTo`, or reorders within the task's own Inbox or Working on it. One Undo
+covers the drop. The timer redraws once the day changes, so Due groups move on at midnight.
 
 Each task row carries a `pane` (`taskPane` in `src/ui.ts`): an inline form `task` (name as the
 heading, status, due, labels, description), a facts line, a Related section and an Updates
@@ -87,17 +115,19 @@ on, and the lifecycle actions.
 | `src/model.ts` | Types, seed data, validation, task/label/relation operations, schema upgrade. No I/O. |
 | `src/lifecycle.ts` | The state machine (`TRANSITIONS`, `transition`), sections, ordering, drag moves, unread rules and the clock (`tick`). No I/O. |
 | `src/store.ts` | Loads and atomically saves `ontrack.json` (temporary file, then rename). |
+| `src/display.ts` | The filter row: normalizing, selections and arrangement, where a task falls (status, due bucket, label value), the grouped sections and drop targets. No I/O. |
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
 | `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 5 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
-`relationTypes` and `order` (`inbox`, `working`: task ids in the person's order). IDs
+Schema 6 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+`relationTypes`, `order` (`inbox`, `working`: task ids in the person's order) and `filters` (the
+filter row, above). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
@@ -114,7 +144,8 @@ wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a ti
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
 
-Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `archived`,
+Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `archived` with
+`archivedAt`,
 `unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`, `dueAnnounced` (the due value already
 announced, so it's announced once) and `sessions` (`{start, end?, by}`; `by` is `"me"` today and
 leaves room for an agent). A task's section is its `state` (`sectionOf`); there is
@@ -150,7 +181,9 @@ gets an empty `updates` list and `nextUpdateId` starts at 1) and schema 3 (no ta
 `pinned` and `order.pinned` are dropped, and pinned tasks get a yes/no "Pinned" label, made, or
 reused when one of that name exists, only if some task was pinned) and schema 4 (a text label's
 values become `{text, color}` with colors it uses least, and values tasks typed into a free-text
-label join its list, A–Z, after the listed ones; labels keep showing one color).
+label join its list, A–Z, after the listed ones; labels keep showing one color) and schema 5 (the
+filter row starts as the list looked: Status grouping and showing Ongoing, then Due and each
+label; archived tasks get `archivedAt` from `updated`).
 
 ## Tests
 

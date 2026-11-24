@@ -189,12 +189,11 @@ test("Undo restores what settle, archive and delete changed, but only briefly", 
 	expect(rows().some((r) => r.id === "2")).toBe(false);
 	await event("archive", { rowId: "3" });
 	expect(rows().some((r) => r.id === "3")).toBe(false);
-	await event("field", { form: "show", field: "show", value: "archived" });
-	expect(table().id).toBe("archived");
-	expect(table().sections).toBeUndefined();
-	expect(rows().map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "add-update", "delete"]]]);
+	// Archived is a Status value: shown, it's the last group, collapsed and dimmed.
+	await event("filter", { filter: "status", values: [] });
+	expect(table().sections.at(-1)).toMatchObject({ id: "archived", label: "Archived", collapsed: true, muted: true });
+	expect(rows().filter((r) => groupOf(r) === "archived").map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "add-update", "delete"]]]);
 	await event("unarchive", { rowId: "3" });
-	await event("field", { form: "show", field: "show", value: "active" });
 	expect(bySection().inbox[0]).toBe("Fix login bug");
 });
 
@@ -727,4 +726,78 @@ test("removing a relation, a label or a relation type offers Undo", async () => 
 	expect(toasts().at(-1)).toMatchObject({ text: "Deleted the relation type “Supersedes”", action: { id: "undo" } });
 	await event("undo", undoPayload(), "toast");
 	expect(saved.at(-1)!.relationTypes).toHaveLength(types);
+});
+
+test("filters and grouping are saved, and choosing them leaves a standing Undo", async () => {
+	const { saved, event } = await start(fixture());
+	await event("settle", { rowId: "1" });
+	await event("filter-arrange", { order: ["label:1", "status", "due"], grouped: ["label:1", "status"] });
+	await event("filter", { filter: "label:3", values: ["High"] });
+	expect(saved.at(-1)!.filters.slice(0, 2).map((f) => [f.id, f.group])).toEqual([["label:1", true], ["status", true]]);
+	expect(saved.at(-1)!.filters.find((f) => f.id === "label:3")!.selected).toEqual(["High"]);
+	expect(tree("screen:tasks").filters.map((f: any) => [f.id, f.group])).toEqual([["label:1", true], ["status", true], ["due", false], ["label:2", false], ["label:3", false], ["label:4", false]]);
+	// Undo still reverts the settle, and keeps the new filters.
+	await event("filter", { filter: "label:3", values: [] });
+	await event("undo", undoPayload(), "toast");
+	expect(rows().find((r) => r.id === "1").actions).toContain("work");
+	expect(tree("screen:tasks").filters[0]).toMatchObject({ id: "label:1", group: true });
+});
+
+test("Status offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
+	await start(fixture());
+	const [status, due, project, personal] = tree("screen:tasks").filters;
+	expect(status).toMatchObject({ id: "status", label: "Status", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
+	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on it", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
+	expect(due.options.map((o: any) => o.label)).toEqual(["Overdue", "Today", "Next 6 days", "Later", "Past", "No date"]);
+	expect(project.options.at(-1)).toMatchObject({ value: "__none", label: "No Project", count: 3 });
+	expect(personal.options.map((o: any) => o.label)).toEqual(["Yes", "No"]);
+});
+
+test("a drag into a label's group sets the value, into Status groups moves too, and one Undo reverts both", async () => {
+	const { event } = await start(fixture());
+	await event("filter-arrange", { order: ["label:3", "status"], grouped: ["label:3", "status"] });
+	// Only tasks' groups show; drag #1 from No Priority › Inbox into High › Working on it.
+	await event("reorder", { table: "tasks", rowId: "1", section: "l3=High/working", before: null });
+	const row = () => rows().find((r) => r.id === "1");
+	expect(row().group).toBe("l3=High/working");
+	expect(row().cells.name.tags.map((t: any) => t.text)).toEqual(["High"]);
+	expect(table().sections.map((s: any) => s.id)).toEqual(["l3=High", "l3=__none"]);
+	await event("undo", undoPayload(), "toast");
+	expect(row().group).toBe("l3=__none/inbox");
+	expect(row().cells.name.tags).toEqual([]);
+});
+
+test("a drag into Today sets the due date; into Later it's refused with a hint", async () => {
+	const { event } = await start(fixture());
+	await event("filter-arrange", { order: ["due", "status"], grouped: ["due"] });
+	await event("reorder", { table: "tasks", rowId: "2", section: "d=today", before: null });
+	expect(rows().find((r) => r.id === "2").group).toBe("d=today");
+	await event("reorder", { table: "tasks", rowId: "2", section: "d=later", before: null });
+	expect(toasts().at(-1)).toMatchObject({ text: "Set its due date in the details to move it there.", tone: "error" });
+	expect(rows().find((r) => r.id === "2").group).toBe("d=today");
+});
+
+test("a drag onto Archived archives; out of it into a state unarchives and moves", async () => {
+	const { event } = await start(fixture());
+	await event("filter", { filter: "status", values: [] });
+	await event("reorder", { table: "tasks", rowId: "3", section: "archived", before: null });
+	expect(rows().find((r) => r.id === "3").group).toBe("archived");
+	expect(toasts().at(-1)).toMatchObject({ text: "Archived #3" });
+	await event("reorder", { table: "tasks", rowId: "3", section: "settled", before: null });
+	expect(rows().find((r) => r.id === "3").group).toBe("settled");
+});
+
+test("without grouping the list is flat and a filter that would nest past ten levels says so", async () => {
+	const d = fixture();
+	for (let i = 0; i < 8; i++) d.labels.push({ id: 10 + i, name: `L${i}`, type: "bool", color: "blue", values: [], freeform: false });
+	const { event } = await start(d);
+	await event("filter-arrange", { order: [], grouped: [] });
+	expect(table().sections).toBeUndefined();
+	expect(rows().every((r) => r.group === undefined)).toBe(true);
+	const ids = tree("screen:tasks").filters.map((f: any) => f.id);
+	// Status (2) and eight one-level filters fill the ten levels; the rest can't group.
+	await event("filter-arrange", { order: ids, grouped: ids.slice(0, 9) });
+	expect(tree("screen:tasks").filters.filter((f: any) => f.groupDisabled).map((f: any) => f.groupDisabled)).toEqual(Array(ids.length - 9).fill("Grouping goes 10 levels deep at most"));
+	await event("filter-arrange", { order: ids, grouped: ids });
+	expect(toasts().at(-1)).toMatchObject({ text: "Grouping goes 10 levels deep at most.", tone: "error" });
 });

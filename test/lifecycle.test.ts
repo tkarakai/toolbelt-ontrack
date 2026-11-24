@@ -300,12 +300,9 @@ describe("watching", () => {
 		expect(m.findTask(d, a)).toMatchObject({ state: "inbox", unread: true, unreadReason: "Due now · waiting on Cobra team for less than a day" });
 	});
 
-	test("a drop's section is its state; a drop on Progressing itself starts work", () => {
+	test("a drop into a state reorders its own section or makes that move", () => {
 		const { d, ids } = setup(["w1", "s1"]);
 		const [w1, s1] = ids as number[] as [number, number];
-		for (const id of ["inbox", "working", "snoozed", "watching", "settled"]) expect(life.dropSection(id)).toBe(id as life.SectionId);
-		expect(life.dropSection(life.PROGRESSING)).toBe("working");
-		expect(() => life.dropSection("pinned")).toThrow(m.InvalidInput);
 		life.transition(d, w1, "working", {}, NOW);
 		// Reordering within Snoozed is fine; dropping into it from elsewhere isn't.
 		life.transition(d, s1, "snoozed", { until: NOW + H }, NOW);

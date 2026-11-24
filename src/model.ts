@@ -1,8 +1,9 @@
 // OnTrack's data model and the pure operations on it. Nothing here touches the disk or the SDK,
 // so every rule is testable on plain objects.
 import { HUES, leastUsedHue, type Hue } from "@toolbelt/sdk";
+import { defaultFilters, normalizeFilters, type FilterSetting } from "./display";
 
-export const SCHEMA = 5;
+export const SCHEMA = 6;
 
 export type LabelType = "string" | "bool";
 
@@ -105,8 +106,10 @@ export type Task = {
 	labels: Record<string, string | boolean>;
 	relations: Relation[];
 	state: TaskState;
-	/** Hidden from the sections; found in the Archived view and by search. */
+	/** Out of the way: shown only when the Status filter includes Archived, in its own group. */
 	archived: boolean;
+	/** Epoch ms it was archived (while `archived`); the Archived group shows newest first. */
+	archivedAt?: number;
 	/** Something happened since the person last opened it; `unreadReason` says what. */
 	unread: boolean;
 	unreadReason?: string;
@@ -135,6 +138,8 @@ export type Data = {
 	labels: Label[];
 	relationTypes: RelationType[];
 	order: Order;
+	/** The Tasks toolbar's filter row, in order: what each filter shows and which ones group. */
+	filters: FilterSetting[];
 };
 
 export class InvalidInput extends Error {}
@@ -181,6 +186,7 @@ export function seed(): Data {
 		nextLabelId: labels.length + 1,
 		nextUpdateId: 1,
 		tasks: [],
+		filters: defaultFilters({ labels }),
 		labels,
 		relationTypes: [
 			{ id: "parent", name: "Parent", inverse: "Child" },
@@ -571,6 +577,9 @@ export function parseData(value: unknown): Data {
 	if (d.tasks.some((t) => t.watch !== undefined && (typeof t.watch?.since !== "number" || !Number.isInteger(t.watch.checks)))) fail("The data file is damaged.");
 	if (!d.order || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	if (d.labels.some((l) => !Array.isArray(l?.values) || l.values.some((v) => typeof v?.text !== "string" || !isHue(v.color)))) fail("The data file is damaged.");
+	if (!Array.isArray(d.filters)) fail("The data file is damaged.");
+	// The filter row follows the labels (it's repaired, not refused).
+	d.filters = normalizeFilters(d);
 	return d;
 }
 
@@ -630,7 +639,7 @@ export function upgrade3to4(old: any): any {
  * colors the label uses least, in list order; values tasks typed into a free-text label join its
  * list after them (A–Z). Labels keep showing one color until the person chooses otherwise.
  */
-export function upgrade4to5(old: any, random?: () => number): Data {
+export function upgrade4to5(old: any, random?: () => number): Omit<Data, "schema" | "filters"> & { schema: 5 } {
 	if (!old || old.schema !== 4 || !Array.isArray(old.tasks) || !Array.isArray(old.labels)) fail("Expected schema 4 data.");
 	const labels: Label[] = old.labels.map((l: any) => {
 		const values: LabelValue[] = [];
@@ -646,5 +655,16 @@ export function upgrade4to5(old: any, random?: () => number): Data {
 		}
 		return { ...l, values };
 	});
-	return { ...old, schema: SCHEMA, labels };
+	return { ...old, schema: 5, labels };
+}
+
+/**
+ * Schema 5 → 6: the Tasks toolbar's filter row is saved (Status grouping and showing Ongoing,
+ * as the list looked; Due and each label after it), and archived tasks remember when they were
+ * archived (taken as their last change), so the Archived group can show newest first.
+ */
+export function upgrade5to6(old: any): Data {
+	if (!old || old.schema !== 5 || !Array.isArray(old.tasks) || !Array.isArray(old.labels)) fail("Expected schema 5 data.");
+	const tasks = old.tasks.map((t: any) => (t.archived && t.archivedAt === undefined ? { ...t, archivedAt: t.updated } : t));
+	return { ...old, schema: SCHEMA, tasks, filters: normalizeFilters({ labels: old.labels, filters: old.filters }) };
 }
