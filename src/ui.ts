@@ -571,7 +571,8 @@ function familyCards(data: Data, task: Task, now: number): Node[] {
 			type: "card" as const,
 			id: `rel-${id}`,
 			title: id === "children" ? title : `${title} · ${tasks.length}`,
-			children: [{ type: "list" as const, id: `rel-${id}`, open: GO_TO_TASK, items: tasks.map((t) => relatedItem(data, t, now)) }],
+			// No icons (the state pill says it); `inset` keeps their space, indenting the rows.
+			children: [{ type: "list" as const, id: `rel-${id}`, open: GO_TO_TASK, inset: true, items: tasks.map((t) => relatedItem(data, t, now)) }],
 		}));
 }
 
@@ -582,7 +583,6 @@ function relatedItem(data: Data, t: Task, now: number) {
 		id: relatedItemId(t.id),
 		title: t.name,
 		prefix: { text: `#${t.id}` },
-		icon: t.archived ? "archive" : STATE_ICONS[t.state],
 		tags: [stateTag(t), ...tags(data, t)],
 		dot: overdueDot(t, now),
 		unread: t.unread || undefined,

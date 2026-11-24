@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- The drawer's Parent, Children, Blocked by and Blocks lists drop the state icon before each task (its state pill already says it) and indent the tasks by its width instead (Toolbelt 0.3.23 and later).
+- Fixed: the selected task in those lists hid its ID and state pills (fixed in Toolbelt 0.3.23).
+- Uses SDK 0.3.17.
 
 ## 0.13.1 — 2026-11-24
 - On a Related pill, only the task (#12 Its name) is the link to it; the relation ("Blocks:") opens the picker to choose another task again (Toolbelt 0.3.22 and later).

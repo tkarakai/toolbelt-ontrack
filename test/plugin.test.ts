@@ -809,9 +809,10 @@ test("the drawer lists Parent, Children, Blocked by and Blocks, and following on
 	const cards = (rowId: string) => rows().find((r) => r.id === rowId).pane.filter((n: any) => String(n.id).startsWith("rel-"));
 	expect(cards("1").map((c: any) => c.title)).toEqual(["Children · 0/2 settled"]);
 	const kids = cards("1")[0].children[0];
-	expect(kids).toMatchObject({ type: "list", open: { id: "open-task" } });
+	expect(kids).toMatchObject({ type: "list", open: { id: "open-task" }, inset: true });
 	expect(kids.items.map((i: any) => i.id)).toEqual(["rel:2", "rel:3"]);
-	expect(kids.items[1]).toMatchObject({ title: "Fix login bug", prefix: { text: "#3" }, icon: STATE_ICONS.working, tags: [{ text: "Working on" }, { text: "High" }] });
+	expect(kids.items[1]).toMatchObject({ title: "Fix login bug", prefix: { text: "#3" }, tags: [{ text: "Working on" }, { text: "High" }] });
+	expect(kids.items[1].icon).toBeUndefined();
 	expect(cards("3").map((c: any) => c.title)).toEqual(["Parent · 1", "Blocks · 1"]);
 	expect(cards("2").map((c: any) => c.title)).toEqual(["Parent · 1", "Blocked by · 1"]);
 	// Clicking one goes to that task; so does a Related pill.
