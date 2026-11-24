@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.12.0 — 2026-11-24
 - **Parent and Blocks are built in**: they can be renamed but not deleted, since subtasks and unblocking rely on them. Settings marks them with a lock and says what each does. If one was deleted before, it comes back.
 - **The drawer lists a task's Parent, Children, Blocked by and Blocks**, each task shown as in the table (state, ID, name, labels, due date, dots). Click one, or press ↵ on it, to go to that task.
 - **Related pills are links**: click a pill's name to go to that task.
