@@ -112,3 +112,16 @@ test("a drop names every value along its section's path", () => {
 	expect([...d.dropTarget("archived")]).toEqual([["status", "archived"]]);
 	expect(d.dropTarget("").size).toBe(0);
 });
+
+test("a group's forest nests tasks under parents, with parents elsewhere as context up to the top", () => {
+	const data = fixture();
+	// #1 > #2 > #3 (#2 is working, so the Inbox has #1 and #3).
+	data.tasks.find((t) => t.id === 2)!.relations.push({ task: 1, type: "parent" });
+	data.tasks.find((t) => t.id === 3)!.relations.push({ task: 2, type: "parent" });
+	const inbox = data.tasks.filter((t) => t.id === 3 || t.id === 1);
+	const show = (nodes: d.TreeNode[]): any[] => nodes.map((n) => [n.task.id, n.context, show(n.children)]);
+	expect(show(d.forest(data, inbox))).toEqual([[1, false, [[2, true, [[3, false, []]]]]]]);
+	expect(d.rootOf(data, data.tasks.find((t) => t.id === 3)!).id).toBe(1);
+	expect([...d.placement(data, data.tasks, "parent")].map(([id, root]) => [id, root.id])).toEqual([[2, 1], [3, 1]]);
+	expect(d.placement(data, data.tasks, "own").size).toBe(0);
+});

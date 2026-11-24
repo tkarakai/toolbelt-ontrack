@@ -743,10 +743,10 @@ test("filters and grouping are saved, and choosing them leaves a standing Undo",
 	expect(tree("screen:tasks").filters[0]).toMatchObject({ id: "label:1", group: true });
 });
 
-test("Status offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
+test("Workflow offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
 	await start(fixture());
 	const [status, due, project, personal] = tree("screen:tasks").filters;
-	expect(status).toMatchObject({ id: "status", label: "Status", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
+	expect(status).toMatchObject({ id: "status", label: "Workflow", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
 	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on it", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
 	expect(due.options.map((o: any) => o.label)).toEqual(["Overdue", "Today", "Next 6 days", "Later", "Past", "No date"]);
 	expect(project.options.at(-1)).toMatchObject({ value: "__none", label: "No Project", count: 3 });
@@ -800,4 +800,72 @@ test("without grouping the list is flat and a filter that would nest past ten le
 	expect(tree("screen:tasks").filters.filter((f: any) => f.groupDisabled).map((f: any) => f.groupDisabled)).toEqual(Array(ids.length - 9).fill("Grouping goes 10 levels deep at most"));
 	await event("filter-arrange", { order: ids, grouped: ids });
 	expect(toasts().at(-1)).toMatchObject({ text: "Grouping goes 10 levels deep at most.", tone: "error" });
+});
+
+/** #1 is the parent of #2 and #3; #3 is being worked on. */
+function family() {
+	const d = fixture();
+	d.tasks.find((t) => t.id === 2)!.relations.push({ task: 1, type: "parent" });
+	d.tasks.find((t) => t.id === 3)!.relations.push({ task: 1, type: "parent" });
+	d.tasks.find((t) => t.id === 3)!.state = "working";
+	d.order.inbox = d.order.inbox.filter((x) => x !== 3);
+	d.order.working = [3];
+	return d;
+}
+/** Each row as [id, group, context, child ids], nested rows included. */
+const shape = (list: any[]): any[] => list.map((r) => [r.id, r.group ?? null, r.context ?? null, r.children ? shape(r.children) : []]);
+
+test("Subtasks is a choice after the filters; off, every task is a row of its own", async () => {
+	const { saved, event } = await start(family());
+	const control = tree("screen:tasks").controls[0];
+	expect(control).toMatchObject({ type: "choice", id: "subtasks", label: "Subtasks", value: "off" });
+	expect(control.options.map((o: any) => [o.value, o.section ?? null])).toEqual([["off", null], ["own", "Subtask hierarchy"], ["parent", "Subtask hierarchy"]]);
+	expect(rows().map((r) => r.id).sort()).toEqual(["1", "2", "3"]);
+	await event("field", { form: "subtasks", field: "subtasks", value: "own" });
+	expect(saved.at(-1)!.subtasks).toBe("own");
+	expect(table().reorderOnto).toBe("Make it a subtask");
+});
+
+test("staying in their own group, a parent elsewhere shows dimmed above its subtasks", async () => {
+	const d = family();
+	d.subtasks = "own";
+	await start(d);
+	expect(shape(rows())).toEqual([
+		["1", "inbox", null, [["2", null, null, []]]],
+		["c1@working", "working", "1", [["3", null, null, []]]],
+	]);
+	// The parent says how far along its subtasks are.
+	expect(rows()[0].cells.name.tags.at(-1)).toMatchObject({ text: "0/2" });
+	expect(rows()[1].actions).toEqual([]);
+});
+
+test("following their parent, the family sits with it and subtasks say their own state", async () => {
+	const d = family();
+	d.subtasks = "parent";
+	await start(d);
+	expect(shape(rows())).toEqual([["1", "inbox", null, [["2", null, null, []], ["3", null, null, []]]]]);
+	expect(rows()[0].children[1].cells.name.tags[0]).toMatchObject({ text: "Working on it" });
+});
+
+test("⌥→ goes under the task above, ⌥← moves out, a drop onto a task nests it, each with Undo", async () => {
+	const d = fixture();
+	d.subtasks = "own";
+	await start(d);
+	const { event } = { event: (n: string, p?: unknown, s = "screen:tasks") => send(s, n, p) };
+	// Inbox: #3, #2, #1. #2 goes under #3.
+	const two = () => rows().flatMap((r) => [r, ...(r.children ?? [])]).find((r: any) => r.id === "2");
+	expect(two().targets.indent).toEqual([{ id: "3", label: "Under #3 Fix login bug", icon: "indent-increase" }]);
+	await event("indent", { rowId: "2", target: "3" });
+	expect(shape(rows())).toEqual([["3", "inbox", null, [["2", null, null, []]]], ["1", "inbox", null, []]]);
+	expect(two().actions).toContain("outdent");
+	await event("outdent", { rowId: "2" });
+	expect(rows().map((r) => r.id)).toEqual(["3", "2", "1"]);
+	await event("reorder", { table: "tasks", rowId: "1", section: "inbox", before: null, onto: "2" });
+	expect(shape(rows())).toEqual([["3", "inbox", null, []], ["2", "inbox", null, [["1", null, null, []]]]]);
+	await event("undo", undoPayload(), "toast");
+	expect(rows().map((r) => r.id)).toEqual(["3", "2", "1"]);
+	// No cycles.
+	await event("indent", { rowId: "2", target: "3" });
+	await event("reorder", { table: "tasks", rowId: "3", section: "inbox", before: null, onto: "2" });
+	expect(toasts().at(-1)).toMatchObject({ text: "That would make a task its own ancestor.", tone: "error" });
 });

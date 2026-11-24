@@ -1,16 +1,16 @@
 // Managed-data migration. Schema 2 added the task lifecycle (sections, pin, unread, snooze,
 // settle, archive, work sessions); schema 3 adds progress notes (updates) to tasks; schema 4 adds
 // watching and turns pins into a label; schema 5 gives a text label one list of values, each with
-// a color; schema 6 saves the Tasks filter row and when tasks were archived. Retry-safe: data
-// already at schema 6 is validated and kept.
+// a color; schema 6 saves the Tasks filter row and when tasks were archived; schema 7 saves how
+// subtasks show. Retry-safe: data already at schema 7 is validated and kept.
 import { defineMigration } from "@toolbelt/sdk";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SCHEMA, seed, upgrade1to2, upgrade2to3, upgrade3to4, upgrade4to5, upgrade5to6 } from "./model";
+import { SCHEMA, seed, upgrade1to2, upgrade2to3, upgrade3to4, upgrade4to5, upgrade5to6, upgrade6to7 } from "./model";
 import { FILE, load, save } from "./store";
 
 defineMigration(({ toSchema, fromSchema, targetDir, progress }) => {
-	if (toSchema !== SCHEMA || !(fromSchema === null || fromSchema === 1 || fromSchema === 2 || fromSchema === 3 || fromSchema === 4 || fromSchema === 5 || fromSchema === SCHEMA)) throw Error(`Unsupported schema change ${fromSchema} → ${toSchema}`);
+	if (toSchema !== SCHEMA || !(fromSchema === null || fromSchema === 1 || fromSchema === 2 || fromSchema === 3 || fromSchema === 4 || fromSchema === 5 || fromSchema === 6 || fromSchema === SCHEMA)) throw Error(`Unsupported schema change ${fromSchema} → ${toSchema}`);
 	const file = join(targetDir, FILE);
 	if (!existsSync(file)) {
 		save(targetDir, seed());
@@ -37,8 +37,12 @@ defineMigration(({ toSchema, fromSchema, targetDir, progress }) => {
 		progress("Label values now have colors of their own");
 	}
 	if (raw?.schema === 5) {
-		save(targetDir, upgrade5to6(raw));
+		raw = upgrade5to6(raw);
 		progress("Filters and grouping are now saved");
+	}
+	if (raw?.schema === 6) {
+		save(targetDir, upgrade6to7(raw));
+		progress("Subtasks can now nest under their parent");
 		return;
 	}
 	load(targetDir);

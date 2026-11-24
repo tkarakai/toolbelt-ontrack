@@ -2,8 +2,8 @@
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { DUE, DUE_BUCKETS, filterValues, groupedLevels, groupTasks, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
-import { colorOf, dueAt, nextValueColor, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { DUE, DUE_BUCKETS, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
+import { colorOf, dueAt, nextValueColor, parentOf, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
@@ -229,6 +229,8 @@ export function taskActions(now: number): Action[] {
 		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
 		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
 		{ id: "mark-read", label: "Mark read", icon: "mail-open", key: "u", group: "edit" },
+		{ id: "indent", label: "Make it a subtask", icon: "indent-increase", key: "alt+right", group: "order" },
+		{ id: "outdent", label: "Move out a level", icon: "indent-decrease", key: "alt+left", group: "order" },
 		{ id: "up", label: "Move up", icon: "arrow-up", key: "alt+up", group: "order" },
 		{ id: "down", label: "Move down", icon: "arrow-down", key: "alt+down", group: "order" },
 		{ id: "archive", label: "Archive", icon: "archive", key: "a", group: "other" },
@@ -342,8 +344,10 @@ function whenCell(task: Task): Cell {
  * A task's row in its group; an overdue one carries a red dot, one brought back by a check-in an
  * eye mark, and an archived one, wherever it shows, an archive mark and dimmed text.
  */
-function taskRow(data: Data, task: Task, now: number, group?: string): Row {
+function taskRow(data: Data, task: Task, now: number, group?: string, tree?: RowTree): Row {
 	const relations = relationsOf(data, task.id);
+	const kids = data.tasks.filter((t) => parentOf(data, t.id) === task.id);
+	const settledKids = kids.filter((t) => t.state === "settled" || t.archived).length;
 	const marks = [
 		...(task.archived ? [{ icon: "archive", tooltip: "Archived" }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
@@ -359,7 +363,12 @@ function taskRow(data: Data, task: Task, now: number, group?: string): Row {
 				text: task.name,
 				dot: overdueDot(task, now),
 				tone: isOverdue(task, now) ? "danger" : task.archived ? "muted" : undefined,
-				tags: tags(data, task),
+				tags: [
+					// Following its parent, a subtask may sit in another state's group: it says its own.
+					...(tree?.ownState ? [{ text: STATUS_LABELS[statusOf(task)], icon: statusOf(task) === "archived" ? "archive" : STATE_ICONS[task.state] }] : []),
+					...tags(data, task),
+					...(kids.length ? [{ text: `${settledKids}/${kids.length}`, icon: "list-tree", tooltip: `${settledKids} of ${kids.length} subtask${kids.length === 1 ? "" : "s"} settled` }] : []),
+				],
 				sub,
 				marks: marks.length ? marks : undefined,
 			},
@@ -368,12 +377,49 @@ function taskRow(data: Data, task: Task, now: number, group?: string): Row {
 			when: whenCell(task),
 		},
 		pane: taskPane(data, task, now),
-		actions: actionsFor(data, task),
-		targets: relations.length
-			? { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }
-			: undefined,
+		actions: [...actionsFor(data, task), ...(tree?.under ? ["indent"] : []), ...(tree && parentOf(data, task.id) !== undefined ? ["outdent"] : [])],
+		targets:
+			relations.length || tree?.under
+				? {
+						...(relations.length && { unrelate: relations.map((r) => ({ id: `${r.holder}:${r.type}:${r.inverse ? task.id : r.task}`, label: `${r.label} ${taskName(data, r.task)}`, icon: "link" })) }),
+						...(tree?.under && { indent: [{ id: String(tree.under.id), label: `Under ${taskName(data, tree.under.id)}`, icon: "indent-increase" }] }),
+					}
+				: undefined,
+		...(tree?.children.length && { children: tree.children, open: true }),
 	};
 }
+
+/** Where a row sits in its group's tree: the rows under it, the task above it (⌥→ goes under that one), and whether it says its own state. */
+type RowTree = { children: Row[]; under?: Task; ownState?: boolean };
+
+/**
+ * A group's rows as a tree (subtasks on): each task under its parent, a parent that's elsewhere
+ * shown dimmed for context (`Row.context`, its id `c<task>@<group>`). Following their parent,
+ * nested tasks say their own state.
+ */
+function treeRows(data: Data, nodes: TreeNode[], group: string | undefined, now: number, mode: SubtaskMode, depth = 0): Row[] {
+	return nodes.map((n, i) => {
+		const children = treeRows(data, n.children, undefined, now, mode, depth + 1);
+		const under = i > 0 ? nodes[i - 1]!.task : undefined;
+		if (!n.context) return taskRow(data, n.task, now, group, { children, under, ownState: mode === "parent" && depth > 0 });
+		return {
+			id: `c${n.task.id}@${group ?? ""}`,
+			context: String(n.task.id),
+			group,
+			cells: { name: { text: n.task.name, sub: `In ${STATUS_LABELS[statusOf(n.task)]}`, tags: tags(data, n.task) }, id: { text: `#${n.task.id}`, mono: true }, due: null, when: null },
+			actions: [],
+			children,
+			open: true,
+		};
+	});
+}
+
+/** The Subtasks control's choices. */
+const SUBTASK_OPTIONS: { value: SubtaskMode; label: string; description?: string; section?: string }[] = [
+	{ value: "off", label: "Off", description: "Every task on a row of its own" },
+	{ value: "own", label: "Stay in their own group", description: "A parent elsewhere shows dimmed above them", section: "Subtask hierarchy" },
+	{ value: "parent", label: "Follow their parent", description: "The whole family sits with its top parent", section: "Subtask hierarchy" },
+];
 
 /** The status picker's choices: where the task is now (with its moment), and where it can go. */
 function statusOptions(task: Task, now: number) {
@@ -437,7 +483,7 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 			appearance: "inline",
 			fields: [
 				{ type: "text", id: "name", label: "Name", value: task.name, heading: true, placeholder: "What needs doing" },
-				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Status", value: task.state, options: statusOptions(task, now) }]),
+				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Workflow", value: task.state, options: statusOptions(task, now) }]),
 				{ type: "datetime", id: "due", label: isOverdue(task, now) ? "Overdue" : "Due", value: task.due ?? "", placeholder: "No due date" },
 				{ type: "tags", id: "labels", label: "Labels", value: toTagValues(task.labels), keys: tagKeys(data) },
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
@@ -492,7 +538,7 @@ function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Fi
 	const values = filterValues(data, f.id);
 	const grouping = { group: f.group, ...(!f.group && groupedLevels(data.filters) + levelsOf(f.id) > MAX_LEVELS && { groupDisabled: DEPTH_LIMIT }) };
 	if (f.id === STATUS)
-		return { id: f.id, label: "Status", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0 })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
+		return { id: f.id, label: "Workflow", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0 })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
 	if (f.id === DUE)
 		return { id: f.id, label: "Due", icon: "calendar", options: values.map((v) => ({ value: v, label: DUE_BUCKETS.find((b) => b.id === v)!.label, count: counts.get(v) ?? 0 })), selected: f.selected, ...grouping };
 	const label = data.labels.find((l) => `label:${l.id}` === f.id)!;
@@ -516,7 +562,19 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 	// The search narrows everything, the filters' counts included.
 	const pool = tableOrder(data).filter((t) => matches(data, t, s));
 	const shown = pool.filter((t) => passes(data, t, now));
-	const { sections, groupOf } = groupTasks(data, shown, now, LOOKS);
+	const mode = data.subtasks;
+	const { sections, groupOf } = groupTasks(data, shown, now, LOOKS, placement(data, shown, mode));
+	let rows: Row[];
+	if (mode === "off") rows = shown.map((t) => taskRow(data, t, now, groupOf.get(t.id)));
+	else {
+		// Each group's tasks (in table order) as a tree.
+		const groups = new Map<string, Task[]>();
+		for (const t of shown) {
+			const key = groupOf.get(t.id) ?? "";
+			groups.set(key, [...(groups.get(key) ?? []), t]);
+		}
+		rows = [...groups].flatMap(([key, tasks]) => treeRows(data, forest(data, tasks), key || undefined, now, mode));
+	}
 	const filters = data.filters.map((f) => filterNode(data, f, pool, now));
 	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
 	const watching = data.tasks.filter((t) => !t.archived && t.state === "watching").length;
@@ -529,6 +587,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 		summary,
 		highlight: s.highlight(),
 		filters,
+		controls: [{ type: "choice", id: "subtasks", label: "Subtasks", icon: "list-tree", value: mode, options: SUBTASK_OPTIONS }],
 		actions: [{ id: "new-task", label: "New task", icon: "plus", primary: true, key: "n" }],
 		children: [
 			{
@@ -543,10 +602,11 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				],
 				appearance: "document",
 				...(sections.length && { sections, reorder: true }),
+				...(mode !== "off" && { reorder: true, reorderOnto: "Make it a subtask" }),
 				selectEvents: true,
 				// ↵ on a task writes an update in its drawer.
 				enter: "add-update",
-				rows: shown.map((t) => taskRow(data, t, now, groupOf.get(t.id))),
+				rows,
 				actions: taskActions(now),
 				empty: data.tasks.length
 						? { title: "No matching tasks", description: "Change the search or filters.", icon: "search-x" }
