@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.13.2 — 2026-11-24
 - The drawer's Parent, Children, Blocked by and Blocks lists drop the state icon before each task (its state pill already says it) and indent the tasks by its width instead (Toolbelt 0.3.23 and later).
 - Fixed: the selected task in those lists hid its ID and state pills (fixed in Toolbelt 0.3.23).
 - Uses SDK 0.3.17.
