@@ -707,15 +707,9 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 		rows = [...groups].flatMap(([key, tasks]) => treeRows(data, forest(data, tasks), key || undefined, now));
 	}
 	const filters = data.filters.map((f) => filterNode(data, f, pool, now));
-	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
-	const watching = data.tasks.filter((t) => !t.archived && t.state === "watching").length;
-	const unread = open.filter((t) => t.unread).length;
-	const ongoing = data.tasks.filter((t) => !t.archived).length;
-	const summary = `${open.length} open${watching ? ` · ${watching} watching` : ""}${unread ? ` · ${unread} unread` : ""}${shown.length !== ongoing ? ` · showing ${shown.length}` : ""}`;
 	return {
 		type: "page",
 		search: { placeholder: "Search tasks" },
-		summary,
 		highlight: s.highlight(),
 		filters,
 		controls: [{ type: "choice", id: "subtasks", label: "Subtasks", icon: "list-tree", value: mode, options: SUBTASK_OPTIONS }],

@@ -544,7 +544,7 @@ test("watch a task, see it come back for its check-in with why, and watch it aga
 	expect(dialog.title).toBe("Watch #1 Write spec");
 	expect(dialog.children[0].fields.map((f: any) => f.id)).toEqual(["on", "repeat", "next"]);
 	await event("dialog-close", { dialog: "watch" });
-	expect(tree("screen:tasks").summary).toBe("2 open · 1 watching");
+	expect(tree("screen:tasks").summary).toBeUndefined();
 	expect(paneNode("1", "task").fields[1].options.find((o: any) => o.value === "watching").label).toMatch(/^Watching · next check-in Nov 20/);
 
 	// The check-in comes due: back on top of the Inbox, unread, saying why.
