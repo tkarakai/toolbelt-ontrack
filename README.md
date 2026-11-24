@@ -120,8 +120,8 @@ The details drawer edits the selected task in place; there's no dialog to open. 
 - **Workflow**, **Due**, **Labels** and **Related**, which read as text until you point at them:
   pick a workflow state (Snooze asks until when), a due date, or add, change and remove label
   pills. Related works like Labels: **+ Add**, pick the relation (Parent, Child, Blocks…), then
-  search for the task; × removes one. Each change offers Undo. Click a Related pill's name to go
-  to that task.
+  search for the task; × removes one. Each change offers Undo. On a Related pill, click the
+  task (#12 Its name) to go to it, or the relation ("Blocks:") to pick another task.
 - The task's **Parent**, **Children** (with how many are settled), **Blocked by** and **Blocks**,
   when it has any, each as a list showing what the table shows: state, ID, name, labels, due date
   and dots. Click one (or ↵ on it) to go to that task in the list; the drawer follows.
