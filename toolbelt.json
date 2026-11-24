@@ -44,11 +44,13 @@
       "ui.heading-note",
       "ui.cell-prefix",
       "ui.list-open",
-      "ui.tag-open"
+      "ui.tag-open",
+      "ui.duration-field"
     ],
     "optional": [
       "navigate",
-      "ui.list-inset"
+      "ui.list-inset",
+      "ui.filter-sections"
     ]
   },
   "data": {

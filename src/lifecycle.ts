@@ -411,33 +411,43 @@ export function nextOnSchedule(task: Task, now: number): number | undefined {
 /** What a stalled task needs to go back to Working on. */
 export const NEXT_STEP = "Write the next step (↵) to get back to it.";
 
-const dayStart = (ms: number) => {
+const MINUTE = 60_000;
+
+/** The local midnight after `ms`. */
+const nextMidnight = (ms: number) => {
 	const d = new Date(ms);
-	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-};
-const nextDay = (day: number) => {
-	const d = new Date(day);
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
 };
-const counts = (day: number, s: StallSettings) => s.weekends || (new Date(day).getDay() !== 0 && new Date(day).getDay() !== 6);
+const weekend = (ms: number) => new Date(ms).getDay() % 6 === 0;
 
-/** Days from `from`'s day to `to`'s that count (weekdays only without weekends): 0 on the same day. */
-export function daysSince(from: number, to: number, s: StallSettings): number {
-	let n = 0;
-	const end = dayStart(to);
-	for (let day = nextDay(dayStart(from)); day <= end && n < 100_000; day = nextDay(day)) if (counts(day, s)) n++;
-	return n;
+/** Time from `from` to `to` that counts: all of it, or without Saturdays and Sundays. */
+export function elapsed(from: number, to: number, s: Pick<StallSettings, "weekends">): number {
+	if (to <= from) return 0;
+	if (s.weekends) return to - from;
+	let ms = 0;
+	for (let at = from; at < to; ) {
+		const end = Math.min(to, nextMidnight(at));
+		if (!weekend(at)) ms += end - at;
+		at = end;
+	}
+	return ms;
 }
 
-/** The moment `n` counted days after `from`'s day, at the stall hour. */
-export function daysAfter(from: number, n: number, s: StallSettings): number {
-	let day = dayStart(from);
-	for (let k = 0; k < n; ) {
-		day = nextDay(day);
-		if (counts(day, s)) k++;
+/** The moment `ms` of counted time has passed since `from`. */
+export function afterElapsed(from: number, ms: number, s: Pick<StallSettings, "weekends">): number {
+	if (s.weekends) return from + ms;
+	let left = ms;
+	let at = from;
+	// Weekdays at most a little over 1,000 days ahead: the settings stop at 30 days.
+	for (let i = 0; i < 2_000; i++) {
+		const end = nextMidnight(at);
+		if (!weekend(at)) {
+			if (at + left <= end) return at + left;
+			left -= end - at;
+		}
+		at = end;
 	}
-	const d = new Date(day);
-	return new Date(d.getFullYear(), d.getMonth(), d.getDate(), s.at, 0).getTime();
+	return at;
 }
 
 /** When a task you're working on was last touched (starting work counts). */
@@ -446,33 +456,40 @@ const touchedAt = (task: Task) => task.touched ?? workingSince(task) ?? task.upd
 /** When a task you're working on stalls if nobody touches it, while stalling is on. */
 export function stallsAt(data: Data, task: Task): number | undefined {
 	if (!data.stall.on || task.archived || task.state !== "working") return undefined;
-	return daysAfter(touchedAt(task), data.stall.after, data.stall);
+	return afterElapsed(touchedAt(task), data.stall.after * MINUTE, data.stall);
 }
 
-/** Counted days since a task was last touched. */
-export const untouchedDays = (data: Data, task: Task, now: number) => daysSince(touchedAt(task), now, data.stall);
+/** Counted time since a task was last touched, in ms. */
+export const untouched = (data: Data, task: Task, now: number) => elapsed(touchedAt(task), now, data.stall);
 
 /** A task you're working on, untouched long enough to warn about (its row turns amber). */
-export const stallWarning = (data: Data, task: Task, now: number) => data.stall.on && !task.archived && task.state === "working" && untouchedDays(data, task, now) >= data.stall.warnAfter;
+export const stallWarning = (data: Data, task: Task, now: number) => data.stall.on && !task.archived && task.state === "working" && untouched(data, task, now) >= data.stall.warnAfter * MINUTE;
 
-/** "3 days", "1 day", "less than a day": counted days, as the settings count them. */
-export const days = (n: number) => (n < 1 ? "less than a day" : `${n} day${n === 1 ? "" : "s"}`);
+/** A length of time, roughly: "less than a minute", "45 minutes", "3 hours", "2 days". */
+export function span(ms: number) {
+	const n = (count: number, unit: string) => `${count} ${unit}${count === 1 ? "" : "s"}`;
+	const minutes = Math.floor(ms / MINUTE);
+	if (minutes < 1) return "less than a minute";
+	if (minutes < 60) return n(minutes, "minute");
+	if (minutes < 1440) return n(Math.floor(minutes / 60), "hour");
+	return n(Math.floor(minutes / 1440), "day");
+}
 
 /** Why it stalled, for its unread line: "Stalled · untouched 3 days · stalled 2× before". */
 export function stallReason(data: Data, task: Task, now: number) {
 	const before = task.stalls ?? 0;
-	return ["Stalled", `untouched ${days(untouchedDays(data, task, now))}`, before ? `stalled ${before}× before` : undefined].filter(Boolean).join(" · ");
+	return ["Stalled", `untouched ${span(untouched(data, task, now))}`, before ? `stalled ${before}× before` : undefined].filter(Boolean).join(" · ");
 }
 
 /** A reminder's unread line: "Still stalled · untouched 5 days · stalled for 2 days". */
 export function reminderReason(data: Data, task: Task, now: number) {
-	return ["Still stalled", `untouched ${days(untouchedDays(data, task, now))}`, `stalled for ${days(daysSince(task.stalledAt ?? now, now, data.stall))}`].join(" · ");
+	return ["Still stalled", `untouched ${span(untouched(data, task, now))}`, `stalled for ${span(elapsed(task.stalledAt ?? now, now, data.stall))}`].join(" · ");
 }
 
 /** When a stalled task is next marked unread to remind you, while reminders are on. */
 export function remindsAt(data: Data, task: Task): number | undefined {
-	if (!data.stall.on || !data.stall.remindEvery || task.archived || task.state !== "stalled") return undefined;
-	return daysAfter(task.remindedAt ?? task.stalledAt ?? task.updated, data.stall.remindEvery, data.stall);
+	if (!data.stall.on || data.stall.remindEvery === null || task.archived || task.state !== "stalled") return undefined;
+	return afterElapsed(task.remindedAt ?? task.stalledAt ?? task.updated, data.stall.remindEvery * MINUTE, data.stall);
 }
 
 /**

@@ -241,10 +241,10 @@ test("Settings has a New button above each table, and labels can shade their val
 	const { saved, event } = await start();
 	const page = tree("screen:labels");
 	expect(page.actions).toBeUndefined();
-	expect(page.children.map((c: any) => [c.type, c.title, c.actions?.map((a: any) => a.id), c.children[0].id])).toEqual([
+	expect(page.children.map((c: any) => [c.type, c.title, c.actions?.map((a: any) => a.id), c.children?.[0].id ?? c.id])).toEqual([
 		["card", "Labels", ["new-label"], "labels"],
 		["card", "Relation types", ["new-relation-type"], "relation-types"],
-		["card", "Stalling", undefined, "stall"],
+		["form", "Stalling", undefined, "stall"],
 	]);
 	await event("new-label", undefined, "screen:labels");
 	const shades = () => labelField("shades");
@@ -1000,16 +1000,17 @@ test("⌥→ goes under the task above, ⌥← moves out, a drop onto a task nes
 
 test("a task left untouched turns amber, stalls, and writing its next step brings it back", async () => {
 	const { saved, event } = await start(fixture());
-	const day = (n: number, hour = 9) => new Date(2026, 10, 14 + n, hour, 0).getTime();
+	const day = (n: number, hour = 12) => new Date(2026, 10, 14 + n, hour, 0).getTime();
 	const row = () => rows().find((r) => r.id === "2");
+	const card = () => row().pane.find((n: any) => n.id === "stall");
 	await event("work", { rowId: "2" });
 	expect(row().actions).toContain("stall");
 	// Day 2: still Working on, its When column says for how long, in amber; the drawer says when it stalls.
 	clock = day(2);
 	await event("search", { query: "" });
 	expect(row().cells.when).toMatchObject({ text: "Untouched 2 days", tone: "warning", icon: STATE_ICONS.stalled });
-	expect(row().pane.find((n: any) => n.tone === "warning").text).toStartWith("Untouched 2 days · it stalls");
-	// Day 3 at 9:00 it stalls, unread.
+	expect(card()).toMatchObject({ type: "card", title: "Stalls soon", children: [{ type: "details", items: [{ label: "Untouched", value: "2 days", tone: "warning" }, { label: "Stalls" }] }, { type: "text" }] });
+	// Three days after it was started, it stalls, unread.
 	clock = day(3);
 	await event("search", { query: "" });
 	// The badge comes before the new tree.
@@ -1017,14 +1018,17 @@ test("a task left untouched turns amber, stalls, and writing its next step bring
 	expect(bySection().stalled).toEqual(["Reply to Anna"]);
 	expect(row()).toMatchObject({ unread: true, cells: { name: { sub: "Stalled · untouched 3 days" } } });
 	expect(row().actions.slice(0, 5)).toEqual(["resume", "unstall", "snooze", "watch", "settle"]);
-	expect(row().pane.find((n: any) => n.tone === "warning").text).toContain("Write the next step (↵) to get back to it");
+	expect(card()).toMatchObject({ title: "Stalled", children: [{ type: "details" }, { type: "text", text: "Write the next step (↵) to get back to it." }] });
+	expect(card().children[0].items.map((i: any) => [i.label, i.value])).toEqual([["Untouched", "3 days"], ["Since", expect.any(String)], ["Times stalled", "First time"], ["Next reminder", expect.any(String)]]);
+	// The card says it; no "New" line repeats it.
+	expect(row().pane.some((n: any) => n.type === "text" && n.text?.startsWith("New"))).toBe(false);
 	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
 	expect(quickList().items.find((i: any) => i.id === "2")).toMatchObject({ icon: STATE_ICONS.stalled, subtitle: "Stalled · untouched 3 days" });
 	// Dragging it back to Working on asks for the next step; saving it moves the task back.
 	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
 	expect(tree("screen:tasks").dialog).toMatchObject({ id: "updates", title: "Next step · #2 Reply to Anna" });
 	expect(bySection().stalled).toEqual(["Reply to Anna"]);
-	clock = day(3, 10);
+	clock = day(3, 13);
 	await event("field", { form: "update-new", field: "text-1", value: "Next: find her last email" });
 	await event("save", { dialog: "updates" });
 	expect(tree("screen:tasks").dialog).toBeUndefined();
@@ -1034,28 +1038,39 @@ test("a task left untouched turns amber, stalls, and writing its next step bring
 	// ⇧P stalls it by hand (read); from the quick view, its update is the next step.
 	await event("stall", { rowId: "2" });
 	expect(row().unread).toBeUndefined();
-	expect(row().cells.name.sub).toBe("Untouched less than a day · stalled 2×");
-	clock = day(3, 11);
+	expect(row().cells.name.sub).toBe("Untouched less than a minute · stalled 2×");
+	clock = day(3, 14);
 	await event("add-update", { rowId: "2", text: "Next: reply", input: "Next: reply" }, "quick");
 	expect(bySection().working).toEqual(["Reply to Anna"]);
 });
 
-test("Settings' Stalling card changes when tasks stall; amber always comes first; off hides Stalled", async () => {
+test("Settings' Stalling section changes when tasks stall, in minutes; amber always comes first; off hides Stalled", async () => {
 	const { saved, event } = await start(fixture());
-	const card = () => tree("screen:labels").children.find((c: any) => c.id === "stalling");
-	const field = (id: string) => card().children[0].fields.find((f: any) => f.id === id);
-	expect(card().children[0].fields.map((f: any) => [f.id, f.value])).toEqual([["on", true], ["after", "3"], ["warnAfter", "2"], ["remindEvery", "1"], ["at", "9"], ["weekends", true]]);
-	expect(field("warnAfter").options.map((o: any) => o.label)).toEqual(["1 day", "2 days"]);
-	await event("field", { form: "stall", field: "after", value: "5" }, "screen:labels");
-	expect(saved.at(-1)!.stall.after).toBe(5);
-	expect(field("warnAfter").options.map((o: any) => o.value)).toEqual(["1", "2", "3", "4"]);
-	await event("field", { form: "stall", field: "warnAfter", value: "4" }, "screen:labels");
-	await event("field", { form: "stall", field: "after", value: "3" }, "screen:labels");
+	const form = () => tree("screen:labels").children.find((c: any) => c.id === "stall");
+	const field = (id: string) => form().fields.find((f: any) => f.id === id);
+	// A form of its own (Toolbelt draws it as a card), not one boxed inside another card.
+	expect(form()).toMatchObject({ type: "form", title: "Stalling" });
+	expect(form().fields.map((f: any) => [f.id, f.type, f.value])).toEqual([["on", "switch", true], ["after", "duration", 4320], ["warnAfter", "duration", 2880], ["remindEvery", "duration", 1440], ["weekends", "switch", true]]);
+	expect(field("warnAfter")).toMatchObject({ min: 1, max: 4319 });
+	expect(field("remindEvery")).toMatchObject({ none: "Never", presets: expect.arrayContaining([{ value: null }]) });
+	await event("field", { form: "stall", field: "after", value: 90 }, "screen:labels");
 	expect(toasts().at(-1)).toMatchObject({ text: expect.stringContaining("Rows turn amber before tasks stall") });
-	expect(saved.at(-1)!.stall).toMatchObject({ after: 5, warnAfter: 4 });
+	await event("field", { form: "stall", field: "warnAfter", value: 30 }, "screen:labels");
+	await event("field", { form: "stall", field: "after", value: 90 }, "screen:labels");
+	expect(saved.at(-1)!.stall).toMatchObject({ after: 90, warnAfter: 30 });
+	expect(field("warnAfter").max).toBe(89);
+	expect(field("warnAfter").presets.map((p: any) => p.value)).toEqual([30, 60]);
+	await event("field", { form: "stall", field: "remindEvery", value: null }, "screen:labels");
+	expect(saved.at(-1)!.stall.remindEvery).toBeNull();
 	await event("field", { form: "stall", field: "on", value: false }, "screen:labels");
-	expect(card().children[0].fields.map((f: any) => f.id)).toEqual(["on"]);
+	expect(form().fields.map((f: any) => f.id)).toEqual(["on"]);
 	await event("work", { rowId: "2" });
 	expect(rows().find((r) => r.id === "2").actions).not.toContain("stall");
 	expect(table().sections[1].sections.map((s: any) => s.id)).toEqual(["working", "snoozed", "watching"]);
+});
+
+test("the Workflow menu follows the list: Progressing's states under their heading", async () => {
+	await start(fixture());
+	const status = tree("screen:tasks").filters[0];
+	expect(status.options.map((o: any) => [o.value, o.section])).toEqual([["inbox", undefined], ["working", "Progressing"], ["stalled", "Progressing"], ["snoozed", "Progressing"], ["watching", "Progressing"], ["settled", undefined], ["archived", undefined]]);
 });

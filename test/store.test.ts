@@ -87,7 +87,7 @@ test("migration seeds once and keeps existing data", async () => {
 		const working = { ...seven.tasks[0]!, archived: false, state: "working", sessions: [{ start: 100, by: "me" }], updates: [{ id: 1, added: 50, updated: 300, text: "x" }] };
 		writeFileSync(join(dir, FILE), JSON.stringify({ ...seven, schema: 7, tasks: [working], filters: [{ id: "status", group: true, selected: ["inbox", "working"] }] }));
 		expect((await migrate(7)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks you're working on now stall when left untouched"]);
-		expect(load(dir)).toMatchObject({ schema: 8, stall: { on: true, after: 3, warnAfter: 2, remindEvery: 1, at: 9, weekends: true }, tasks: [{ state: "working", touched: 300 }] });
+		expect(load(dir)).toMatchObject({ schema: 8, stall: { on: true, after: 4320, warnAfter: 2880, remindEvery: 1440, weekends: true }, tasks: [{ state: "working", touched: 300 }] });
 		expect(load(dir).filters[0]).toEqual({ id: "status", group: true, selected: ["inbox", "working", "stalled"] });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

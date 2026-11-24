@@ -165,25 +165,35 @@ on, and the lifecycle actions. A stalled task offers `add-update` (U, its next s
 
 ### Stalling
 
-`data.stall` (`StallSettings`: `on`, `after`, `warnAfter`, `remindEvery`, `at`, `weekends`) is
-edited by Settings' Stalling card, a form `stall` whose fields save one at a time through
-`setStall`, which checks them together (`after` 2–30, `warnAfter` 1 to `after` − 1,
-`remindEvery` 0–30 with 0 for never, `at` 0–23). `parseData` repairs damaged settings to their
-defaults (`DEFAULT_STALL`: on, 3, 2, 1, 9, true).
+`data.stall` (`StallSettings`: `on`, `after`, `warnAfter`, `remindEvery`, `weekends`) holds
+minutes. Settings' Stalling section is a form `stall` (Toolbelt draws a page-level form as its own
+card) with `duration` fields (`ui.duration-field`) whose events carry minutes, or `null` for
+Never; each saves alone through `setStall`, which checks them together (`after` 2 minutes to
+`MAX_STALL_MINUTES`, 30 days; `warnAfter` 1 to `after` − 1, which is also its field's `max`;
+`remindEvery` 1 to 30 days or `null`). `parseData` repairs damaged settings (`DEFAULT_STALL`: on,
+3 days, 2 days, a day, weekends counted), moving amber to two thirds of the stall when it
+wouldn't come first.
 
 A task's `touched` is its last real work. `model.ts` sets it when an update is added or its text
 edited, when the name, description or due date changes (`updateTask`) and when it gets a
 subtask (`relate`, `setParent`); `lifecycle.ts` when it moves into Working on and when one of
 its subtasks settles. Labels, relations, order and reading don't touch it.
 
-Days are counted on the local calendar (`daysSince`, `daysAfter`), weekdays only without
-`weekends`. `stallsAt` is `after` counted days after `touched`'s day, at `at` o'clock;
-`stallWarning` (the amber When cell and the drawer's line) holds from `warnAfter` counted days;
-`remindsAt` is `remindEvery` counted days after `remindedAt`. `tick` stalls a task whose time
-came (unread, `stallReason`), reminds (unread again, `reminderReason`, `remindedAt` moves on)
-and first runs `resumeTouched`: a stalled task touched after `stalledAt` goes back to the top of
-Working on. The plugin runs `resumeTouched` after each event too, to toast it. `nextWake`
-includes stall and reminder times.
+Time counts as elapsed milliseconds (`elapsed`, `afterElapsed`), without local Saturdays and
+Sundays when `weekends` is off. `stallsAt` is `after` minutes of counted time past `touched`;
+`stallWarning` (the amber When cell and the drawer's *Stalls soon* section) holds from
+`warnAfter`; `remindsAt` is `remindEvery` past `remindedAt`. `span` words a length roughly
+("45 minutes", "3 hours", "2 days"). `tick` stalls a task whose time came (unread,
+`stallReason`), reminds (unread again, `reminderReason`, `remindedAt` moves on) and first runs
+`resumeTouched`: a stalled task touched after `stalledAt` goes back to the top of Working on.
+The plugin runs `resumeTouched` after each event too, to toast it. `nextWake` includes stall
+and reminder times.
+
+The drawer's stall section (`stallCard`) is a `card` titled *Stalled* or *Stalls soon* with
+`details` rows (the untouched time in the warning tone) and one muted line on what to do; the
+other moves are the drawer's buttons. A stalled task's unread line isn't repeated above it.
+The Workflow filter's Progressing options carry `section: "Progressing"`
+(`ui.filter-sections`, optional), so its menu groups the way the list does.
 
 ## Code ownership
 
@@ -264,7 +274,7 @@ values become `{text, color}` with colors it uses least, and values tasks typed 
 label join its list, A–Z, after the listed ones; labels keep showing one color) and schema 5 (the
 filter row starts as the list looked: Status grouping and showing Ongoing, then Due and each
 label; archived tasks get `archivedAt` from `updated`) and schema 6 (`subtasks` starts `off`)
-and schema 7 (`stall` starts with its defaults; a task in Working on gets `touched` from its
+and schema 7 (`stall` starts with its defaults, in minutes; a task in Working on gets `touched` from its
 latest work session or update, `lastWork`; a Status filter showing Working on shows Stalled too).
 
 ## Tests

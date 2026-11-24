@@ -57,25 +57,26 @@ export type Relation = { task: number; type: string };
 export type TaskState = "inbox" | "working" | "stalled" | "snoozed" | "watching" | "settled";
 
 /**
- * When a task you're working on stalls. Days are calendar days (weekdays only without
- * `weekends`); stalls and reminders happen at `at` o'clock on the day they fall due.
+ * When a task you're working on stalls, in minutes of time that counts: all of it, or without
+ * Saturdays and Sundays when `weekends` is off.
  */
 export type StallSettings = {
 	/** Tasks stall on their own, Working on rows warn, and stalled tasks remind. */
 	on: boolean;
-	/** Days without an update or edit before a task in Working on stalls (2–30). */
+	/** Minutes without an update or edit before a task in Working on stalls (2 to 30 days). */
 	after: number;
-	/** Days without one before its row turns amber (1 to `after` − 1). */
+	/** Minutes without one before its row turns amber (1 to `after` − 1). */
 	warnAfter: number;
-	/** Days between reminders while it stays stalled (marked unread again); 0: never. */
-	remindEvery: number;
-	/** The hour (0–23) stalls and reminders happen. */
-	at: number;
-	/** Saturdays and Sundays count as days. */
+	/** Minutes between reminders while it stays stalled (marked unread again); null: never. */
+	remindEvery: number | null;
+	/** Saturdays and Sundays count. */
 	weekends: boolean;
 };
 
-export const DEFAULT_STALL: StallSettings = { on: true, after: 3, warnAfter: 2, remindEvery: 1, at: 9, weekends: true };
+const DAY = 1440;
+/** The longest stall threshold or reminder interval, in minutes: 30 days. */
+export const MAX_STALL_MINUTES = 30 * DAY;
+export const DEFAULT_STALL: StallSettings = { on: true, after: 3 * DAY, warnAfter: 2 * DAY, remindEvery: DAY, weekends: true };
 
 export type CadenceUnit = "day" | "week" | "month";
 export const CADENCE_UNITS: readonly CadenceUnit[] = ["day", "week", "month"];
@@ -662,42 +663,39 @@ export function deleteRelationType(data: Data, id: string) {
 // ── stalling ────────────────────────────────────────────────────────────
 
 const whole = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : Number.NaN);
+const minutesOk = (m: number, lo: number, hi: number) => Number.isInteger(m) && m >= lo && m <= hi;
 
 /**
  * Changes stalling settings, one or several at a time, checking them together: a task stalls
- * after 2–30 days, turns amber earlier (at least a day), is reminded every 1–30 days or never, at
- * an hour of the day.
+ * after 2 minutes to 30 days, turns amber earlier (at least a minute), and is reminded every
+ * minute to 30 days, or never (`remindEvery` null).
  */
 export function setStall(data: Data, input: Partial<Record<keyof StallSettings, unknown>>): StallSettings {
 	const next = { ...data.stall };
 	for (const [key, raw] of Object.entries(input) as [keyof StallSettings, unknown][]) {
 		if (key === "on" || key === "weekends") next[key] = raw === true;
-		else if (key === "after" || key === "warnAfter" || key === "remindEvery" || key === "at") next[key] = whole(raw);
+		else if (key === "after" || key === "warnAfter") next[key] = whole(raw);
+		else if (key === "remindEvery") next.remindEvery = raw === null || raw === "" ? null : whole(raw);
 	}
-	if (!Number.isInteger(next.after) || next.after < 2 || next.after > 30) fail("A task stalls after 2 to 30 days.");
-	if (!Number.isInteger(next.warnAfter) || next.warnAfter < 1) fail("Rows turn amber after at least a day.");
-	if (next.warnAfter >= next.after) fail(`Rows turn amber before tasks stall: choose fewer than ${next.after} days, or let them stall later first.`);
-	if (!Number.isInteger(next.remindEvery) || next.remindEvery < 0 || next.remindEvery > 30) fail("Remind every 1 to 30 days, or never.");
-	if (!Number.isInteger(next.at) || next.at < 0 || next.at > 23) fail("Choose an hour of the day.");
+	if (!minutesOk(next.after, 2, MAX_STALL_MINUTES)) fail("A task stalls after 2 minutes to 30 days.");
+	if (!minutesOk(next.warnAfter, 1, MAX_STALL_MINUTES)) fail("Rows turn amber after at least a minute.");
+	if (next.warnAfter >= next.after) fail("Rows turn amber before tasks stall: make amber earlier first, then stall sooner.");
+	if (next.remindEvery !== null && !minutesOk(next.remindEvery, 1, MAX_STALL_MINUTES)) fail("Remind every minute to 30 days, or never.");
 	data.stall = next;
 	return next;
 }
 
-/** Stalling settings as stored: what's missing or doesn't fit the rest falls back to its default. */
+/**
+ * Stalling settings as stored: each one that's missing or out of range falls back to its
+ * default, and amber that wouldn't come before the stall moves to two thirds of it.
+ */
 function repairStall(value: unknown): StallSettings {
-	const probe = { stall: { ...DEFAULT_STALL } } as Data;
-	const input = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-	try {
-		return setStall(probe, input);
-	} catch {
-		// Keep each setting that makes sense on its own.
-		for (const key of ["on", "weekends", "at", "remindEvery", "after", "warnAfter"] as const)
-			if (key in input)
-				try {
-					setStall(probe, { [key]: input[key] });
-				} catch {}
-		return probe.stall;
-	}
+	const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+	const d = DEFAULT_STALL;
+	const after = typeof v.after === "number" && minutesOk(v.after, 2, MAX_STALL_MINUTES) ? v.after : d.after;
+	const warn = typeof v.warnAfter === "number" && minutesOk(v.warnAfter, 1, after - 1) ? v.warnAfter : d.warnAfter < after ? d.warnAfter : Math.max(1, Math.floor((after * 2) / 3));
+	const remind = v.remindEvery === null ? null : typeof v.remindEvery === "number" && minutesOk(v.remindEvery, 1, MAX_STALL_MINUTES) ? v.remindEvery : d.remindEvery;
+	return { on: typeof v.on === "boolean" ? v.on : d.on, after, warnAfter: warn, remindEvery: remind, weekends: typeof v.weekends === "boolean" ? v.weekends : d.weekends };
 }
 
 /** The start of real work on a task as far as its history tells: its last session or update. */

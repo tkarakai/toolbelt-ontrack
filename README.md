@@ -79,7 +79,8 @@ or across the divider to start or stop grouping by it (⌥← / ⌥→ on a focu
 same). Turning Group by on adds the filter as the last level; turning it off puts it first among
 the rest. Everything here is saved; the search isn't.
 
-- **Workflow** offers the six states and Archived. It starts on *Ongoing* (everything but
+- **Workflow** offers the six states and Archived, the way the list groups them: the Inbox, then
+  Progressing's four states under that heading, then Settled and Archived. It starts on *Ongoing* (everything but
   Archived), and **Reset to Ongoing** brings that back.
 - **Due** offers Overdue (open tasks past due), Today, Next 6 days, Later, Past (finished tasks
   with an earlier date) and No date. Groups move on by themselves at midnight.
@@ -198,18 +199,18 @@ Some tasks you start, then stop touching: still yours, still chosen, but not hap
 on should mean *now*, so those move to **Stalled**, under Progressing, where you can see them.
 
 - **Amber first.** A task in Working on without an update or edit for 2 days says so in its When
-  column, in amber (`Untouched 2 days`), and the drawer says when it will stall.
-- **Then it stalls.** After 3 days it moves to Stalled at 9:00, unread, saying why: `Stalled ·
-  untouched 3 days · stalled 2× before`. Its work session ends, so time worked stays honest.
-  **⇧P** (Mark stalled, or a drag into Stalled) stalls a task yourself, read.
-- **It reminds you.** While it stays stalled, it's marked unread again every day at 9:00: `Still
-  stalled · untouched 5 days · stalled for 2 days`.
+  column, in amber (`Untouched 2 days`), and its drawer has a *Stalls soon* section saying when.
+- **Then it stalls.** After 3 days it moves to Stalled, unread, saying why: `Stalled · untouched
+  3 days · stalled 2× before`. Its work session ends, so time worked stays honest. **⇧P** (Mark
+  stalled, or a drag into Stalled) stalls a task yourself, read.
+- **It reminds you.** While it stays stalled, it's marked unread again every day: `Still stalled ·
+  untouched 5 days · stalled for 2 days`.
 - **Touching it brings it back.** Only real work counts: an update written or edited, its name,
   description or due date changed, a subtask added or settled. Opening it, reading it, its labels,
   relations or place in a list don't.
 
-A stalled row reads `Untouched 6 days · stalled 3×`, and its drawer says what gets it moving.
-Then decide:
+A stalled row reads `Untouched 6 days · stalled 3×`. Its drawer has a *Stalled* section: how long
+it's been untouched, since when it's stalled, how many times and the next reminder. Then decide:
 
 - **Write the next step** (↵, Write the next step in its actions, or U in the quick view): the
   smallest concrete thing to do, as an update. Saving it moves the task back to the top of
@@ -221,20 +222,18 @@ Then decide:
 
 A task remembers how many times it stalled, so the ones you keep avoiding show.
 
-**Settings** (⌘S) has a Stalling card, each change saved at once:
+**Settings** (⌘S) has a Stalling section, each change saved at once. Lengths of time are edited
+as days, hours and minutes: ↑/↓ step the part you're on, digits type it, and the menu at the end
+offers quick picks.
 
 - **Stall tasks left untouched**: on by default. Off, nothing stalls, warns or reminds, ⇧P isn't
   offered, and Stalled shows only while tasks are still in it.
-- **Stall after**: 3 days by default (2 to 30).
-- **Turn amber after**: 2 days by default; always fewer days than Stall after, so only those are
-  offered. To stall sooner than amber allows, turn amber earlier first.
-- **Remind me**: every day by default, every few days, or never.
-- **At**: the time of day tasks stall and remind you, 9:00 by default.
-- **Count weekends**: on by default. Off, Saturdays and Sundays don't count toward any of these
-  days.
-
-Days are calendar days: a task touched on Monday turns amber on Wednesday and stalls on Thursday
-at 9:00.
+- **Stall after**: 3 days by default, anywhere from 2 minutes to 30 days.
+- **Turn amber after**: 2 days by default, always sooner than Stall after (it can't be set later).
+  To stall sooner than amber allows, turn amber earlier first.
+- **Remind me every**: a day by default, any length up to 30 days, or Never.
+- **Count weekends**: on by default. Off, time on Saturdays and Sundays doesn't count: a task
+  touched on Friday at 5 PM with 3 days to stall stalls on Wednesday at 5 PM.
 
 ### Watching
 

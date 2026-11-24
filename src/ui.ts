@@ -1,9 +1,9 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, days, defaultCheck, duration, inSection, nextOnSchedule, remindsAt, sectionOf, snoozeChoices, stallsAt, stallWarning, STATES, timeSpent, TRANSITIONS, untouchedDays, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { DUE, DUE_BUCKETS, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
-import { BUILT_IN_RELATIONS, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, remindsAt, sectionOf, snoozeChoices, span, stallsAt, stallWarning, STATES, timeSpent, TRANSITIONS, untouched, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { DUE, DUE_BUCKETS, PROGRESSING_STATES, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
+import { BUILT_IN_RELATIONS, MAX_STALL_MINUTES, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; start?: NewTaskStart; error?: string }
@@ -414,7 +414,7 @@ export function watchLine(w: Watch, now: number) {
 /** "Untouched 6 days · stalled 3×": a stalled task's second line. */
 export function stallLine(data: Data, task: Task, now: number) {
 	const n = task.stalls ?? 0;
-	return [`Untouched ${days(untouchedDays(data, task, now))}`, n > 1 ? `stalled ${n}×` : undefined].filter(Boolean).join(" · ");
+	return [`Untouched ${span(untouched(data, task, now))}`, n > 1 ? `stalled ${n}×` : undefined].filter(Boolean).join(" · ");
 }
 
 /**
@@ -422,7 +422,7 @@ export function stallLine(data: Data, task: Task, now: number) {
  * enough to warn about, says for how long instead, in amber.
  */
 function whenCell(data: Data, task: Task, now: number): Cell {
-	if (stallWarning(data, task, now)) return { text: `Untouched ${days(untouchedDays(data, task, now))}`, tone: "warning", icon: STATE_ICONS.stalled };
+	if (stallWarning(data, task, now)) return { text: `Untouched ${span(untouched(data, task, now))}`, tone: "warning", icon: STATE_ICONS.stalled };
 	if (task.state === "stalled" && task.stalledAt) return { text: "", at: task.stalledAt, icon: STATE_ICONS.stalled, tone: "warning" };
 	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: STATE_ICONS.watching } : { text: "No reminder", icon: STATE_ICONS.watching, tone: "muted" };
 	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: STATE_ICONS.snoozed };
@@ -559,23 +559,45 @@ function statusOptions(data: Data, task: Task, now: number) {
 }
 
 /**
- * Where a task stands on stalling, for the drawer: a stalled one says how long it's been and what
- * gets it moving; one you're working on says when it stalls once its row is amber.
+ * Where a task stands on stalling, as a section of the drawer (drawn like Parent or Updates): a
+ * stalled task's says how long it's been untouched (in amber), since when it's stalled, how many
+ * times and the next reminder, then what gets it moving; a task you're working on that's turned
+ * amber says when it will stall. The other ways out are the drawer's buttons.
  */
-function stallFacts(data: Data, task: Task, now: number): string | undefined {
+function stallCard(data: Data, task: Task, now: number): Node | undefined {
 	if (task.archived) return undefined;
 	const at = (ms: number) => stamp(ms, now);
+	const idle = { label: "Untouched", value: span(untouched(data, task, now)), tone: "warning" as const };
+	const hint = (text: string): Node => ({ type: "text", text, tone: "muted" });
 	if (task.state === "stalled") {
 		const n = task.stalls ?? 1;
 		const reminder = remindsAt(data, task);
-		return [
-			`Stalled${task.stalledAt ? ` since ${at(task.stalledAt)}` : ""} · untouched ${days(untouchedDays(data, task, now))} · stalled ${n === 1 ? "once" : `${n}×`}${reminder ? ` · next reminder ${at(reminder)}` : ""}.`,
-			"Write the next step (↵) to get back to it, or snooze it (Z), watch it if it waits on someone (W), bring it back to the Inbox (P) or settle it (S).",
-		].join(" ");
+		return {
+			type: "card",
+			id: "stall",
+			title: "Stalled",
+			children: [
+				{
+					type: "details",
+					items: [
+						idle,
+						...(task.stalledAt ? [{ label: "Since", value: at(task.stalledAt) }] : []),
+						{ label: "Times stalled", value: n === 1 ? "First time" : `${n}` },
+						{ label: "Next reminder", value: reminder ? at(reminder) : "Off" },
+					],
+				},
+				hint("Write the next step (↵) to get back to it."),
+			],
+		};
 	}
 	const stalls = stallsAt(data, task);
-	if (stalls !== undefined && stallWarning(data, task, now)) return `Untouched ${days(untouchedDays(data, task, now))} · it stalls ${at(stalls)} unless you add an update or edit it.`;
-	return undefined;
+	if (stalls === undefined || !stallWarning(data, task, now)) return undefined;
+	return {
+		type: "card",
+		id: "stall",
+		title: "Stalls soon",
+		children: [{ type: "details", items: [idle, { label: "Stalls", value: at(stalls) }] }, hint("Add an update or edit it to keep it in Working on.")],
+	};
 }
 
 /** A watched task's schedule, in full: who, since when, how often, next and last check. */
@@ -667,7 +689,8 @@ const madeLine = (task: Task, now: number) => [`Created ${stamp(task.created, no
 export function taskPane(data: Data, task: Task, now: number): Node[] {
 	const updates = updatesOf(task);
 	return [
-		...(task.unread && task.unreadReason ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
+		// A stalled task's card says it all; others say what's new.
+		...(task.unread && task.unreadReason && task.state !== "stalled" ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
 		{
 			type: "form",
 			id: "task",
@@ -682,8 +705,9 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
 			],
 		},
-		...(stallFacts(data, task, now) ? [{ type: "text" as const, text: stallFacts(data, task, now)!, tone: "warning" as const }] : []),
 		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
+		// Stalled, or about to: a section of its own, before the relations.
+		...(stallCard(data, task, now) ? [stallCard(data, task, now)!] : []),
 		// The built-in relations, each a list of its tasks, as rich as their rows; a click goes there.
 ...familyCards(data, task, now),
 ...(factsLine(task, now) ? [{ type: "text" as const, text: factsLine(task, now)!, tone: "muted" as const }] : []),
@@ -725,7 +749,8 @@ function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Fi
 	const values = filterValues(data, f.id);
 	const grouping = { group: f.group, ...(!f.group && groupedLevels(data.filters) + levelsOf(f.id) > MAX_LEVELS && { groupDisabled: DEPTH_LIMIT }) };
 	if (f.id === STATUS)
-		return { id: f.id, label: "Workflow", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0 })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
+		// Its menu follows the list: the Inbox, Progressing's states under their heading, then Settled and Archived.
+		return { id: f.id, label: "Workflow", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0, ...(PROGRESSING_STATES.includes(v as StatusValue) && { section: "Progressing" }) })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
 	if (f.id === DUE)
 		return { id: f.id, label: "Due", icon: "calendar", options: values.map((v) => ({ value: v, label: DUE_BUCKETS.find((b) => b.id === v)!.label, count: counts.get(v) ?? 0 })), selected: f.selected, ...grouping };
 	const label = data.labels.find((l) => `label:${l.id}` === f.id)!;
@@ -801,52 +826,50 @@ paneButtons: true,
 
 // ── settings screen ─────────────────────────────────────────────────────
 
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-const range = (from: number, to: number) => Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
-/** Choices with the current value among them, even one stored outside the usual list. */
-const withValue = (values: number[], value: number) => [...new Set([...values, value])].sort((a, b) => a - b);
+const DAY = 1440;
+/** Quick picks for the stalling durations, in minutes; each field offers those that fit it. */
+const STALL_PRESETS = [30, 60, 4 * 60, DAY, 2 * DAY, 3 * DAY, 7 * DAY];
 
 /**
- * The Stalling card: whether tasks stall, after how many days, when rows turn amber (always
- * fewer days than stalling, so only those are offered), how often a stalled task reminds you and
- * at what hour, and whether weekends count. Each change saves on its own (`setStall`).
+ * Settings' Stalling section, one form (Toolbelt draws it as its own card): whether tasks stall,
+ * after how long, when rows turn amber (always sooner, so its longest choice is just under the
+ * stall), how often a stalled task reminds you, and whether weekends count. Durations are edited
+ * as days, hours and minutes; each change saves on its own (`setStall`).
  */
-export function stallCard(data: Data): Node {
+export function stallForm(data: Data): Node {
 	const s = data.stall;
-	const hour = (h: number) => new Date(2000, 0, 1, h, 0).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+	const fits = (max: number) => STALL_PRESETS.filter((m) => m <= max).map((value) => ({ value }));
 	const fields: Field[] = [
-		{ type: "switch", id: "on", label: "Stall tasks left untouched", value: s.on, description: "A task in Working on without an update or edit for a while moves to Stalled, unread. Writing its next step brings it back." },
+		{ type: "switch", id: "on", label: "Stall tasks left untouched", value: s.on, description: "A task in Working on with no update or edit for a while moves to Stalled, unread. Writing its next step brings it back." },
 		...(s.on
 			? ([
-					{ type: "select", id: "after", label: "Stall after", value: String(s.after), options: withValue(range(2, 14).concat([21, 30]), s.after).map((n) => ({ value: String(n), label: plural(n, "day") })) },
+					{ type: "duration", id: "after", label: "Stall after", value: s.after, min: 2, max: MAX_STALL_MINUTES, presets: fits(MAX_STALL_MINUTES) },
 					{
-						type: "select",
+						type: "duration",
 						id: "warnAfter",
 						label: "Turn amber after",
-						value: String(s.warnAfter),
-						options: range(1, s.after - 1).map((n) => ({ value: String(n), label: plural(n, "day") })),
-						description: "The row in Working on says how long it's been untouched, in amber, before it stalls.",
+						value: s.warnAfter,
+						min: 1,
+						max: s.after - 1,
+						presets: fits(s.after - 1),
+						description: "Its row says how long it's been untouched, in amber, before it stalls.",
 					},
 					{
-						type: "select",
+						type: "duration",
 						id: "remindEvery",
-						label: "Remind me",
-						value: String(s.remindEvery),
-						options: withValue([0, ...range(1, 7), 14, 30], s.remindEvery).map((n) => ({ value: String(n), label: n === 0 ? "Never" : n === 1 ? "Every day" : `Every ${n} days` })),
+						label: "Remind me every",
+						value: s.remindEvery,
+						min: 1,
+						max: MAX_STALL_MINUTES,
+						none: "Never",
+						presets: [{ value: null }, ...fits(MAX_STALL_MINUTES)],
 						description: "While a task stays stalled, it's marked unread again.",
 					},
-					{ type: "select", id: "at", label: "At", value: String(s.at), options: range(0, 23).map((h) => ({ value: String(h), label: hour(h) })), description: "Tasks stall and remind you at this time of day." },
-					{ type: "switch", id: "weekends", label: "Count weekends", value: s.weekends, description: "Off: Saturdays and Sundays don't count toward any of these days." },
+					{ type: "switch", id: "weekends", label: "Count weekends", value: s.weekends, description: "Off: time on Saturdays and Sundays doesn't count." },
 				] satisfies Field[])
 			: []),
 	];
-	return {
-		type: "card",
-		id: "stalling",
-		title: "Stalling",
-		description: "Tasks you chose to work on but stopped touching.",
-		children: [{ type: "form", id: "stall", fields }],
-	};
+	return { type: "form", id: "stall", title: "Stalling", description: "Tasks you chose to work on but stopped touching.", fields };
 }
 
 /** Labels and relation types, each table with its own New button above it; then Stalling. */
@@ -924,7 +947,7 @@ export function settingsScreen(data: Data, view: View, now: number): Node {
 					},
 				],
 			},
-			stallCard(data),
+			stallForm(data),
 		],
 		dialog: view.dialog && ["label", "relationType"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
