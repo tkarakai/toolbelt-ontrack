@@ -1,6 +1,6 @@
 {
   "name": "toolbelt-ontrack",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "private": true,
   "description": "Simple, flexible task tracking with colored labels and related tasks. A Toolbelt plugin.",
   "type": "module",
