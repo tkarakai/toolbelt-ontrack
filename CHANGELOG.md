@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.10.0 — 2026-11-24
 - **Subtasks nest under their parent.** A new **Subtasks** menu after the filters: Off, or a subtask hierarchy where subtasks either **stay in their own group** (a parent that's elsewhere shows dimmed above them, saying where it is) or **follow their parent** (the whole family sits with its top parent, each subtask showing its own state). Saved like the filters.
 - Parents show how many subtasks are settled (`1/3`). **⌥→** makes a task a subtask of the one above, **⌥←** moves it out a level, and dropping a task onto another makes it a subtask, each with Undo.
 - The built-in Status filter and the drawer's Status are now called **Workflow**, so they don't clash with a label named Status.
