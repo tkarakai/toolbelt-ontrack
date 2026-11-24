@@ -3,7 +3,7 @@
 import { HUES, leastUsedHue, type Hue } from "@toolbelt/sdk";
 import { defaultFilters, normalizeFilters, type FilterSetting } from "./display";
 
-export const SCHEMA = 6;
+export const SCHEMA = 7;
 
 export type LabelType = "string" | "bool";
 
@@ -140,7 +140,17 @@ export type Data = {
 	order: Order;
 	/** The Tasks toolbar's filter row, in order: what each filter shows and which ones group. */
 	filters: FilterSetting[];
+	/** How subtasks show: not nested, nested in their own groups, or following their parent. */
+	subtasks: SubtaskMode;
 };
+
+/**
+ * `off`: every task is a row of its own. `own`: tasks nest under their parent within their own
+ * group, the parent shown dimmed for context when it's elsewhere. `parent`: a task's whole family
+ * sits in its top parent's group.
+ */
+export type SubtaskMode = "off" | "own" | "parent";
+export const SUBTASK_MODES: readonly SubtaskMode[] = ["off", "own", "parent"];
 
 export class InvalidInput extends Error {}
 const fail = (message: string): never => {
@@ -187,6 +197,7 @@ export function seed(): Data {
 		nextUpdateId: 1,
 		tasks: [],
 		filters: defaultFilters({ labels }),
+		subtasks: "off",
 		labels,
 		relationTypes: [
 			{ id: "parent", name: "Parent", inverse: "Child" },
@@ -513,6 +524,34 @@ export function unrelate(data: Data, holder: number, type: string, target: numbe
 }
 
 /** Following `parent` links up from `parent`, do we reach `child`? */
+/** A task's parent (the first Parent relation it holds), when that task still exists. */
+export function parentOf(data: Data, id: number): number | undefined {
+	const p = data.tasks.find((t) => t.id === id)?.relations.find((r) => r.type === "parent")?.task;
+	return p !== undefined && data.tasks.some((t) => t.id === p) ? p : undefined;
+}
+
+/**
+ * Makes `parent` the task's one parent (null: none), replacing any it had. Refuses a cycle, as
+ * relating does.
+ */
+export function setParent(data: Data, id: number, parent: number | null, now: number) {
+	const task = findTask(data, id);
+	if (parent !== null) {
+		findRelationType(data, "parent");
+		findTask(data, parent);
+		if (parent === id) fail("A task can't be its own subtask.");
+		if (wouldCycle(data, id, parent)) fail("That would make a task its own ancestor.");
+	}
+	const had = task.relations.filter((r) => r.type === "parent").map((r) => r.task);
+	task.relations = task.relations.filter((r) => r.type !== "parent");
+	if (parent !== null) task.relations.push({ task: parent, type: "parent" });
+	task.updated = now;
+	for (const other of [...had, parent]) {
+		const t = data.tasks.find((x) => x.id === other);
+		if (t) t.updated = now;
+	}
+}
+
 function wouldCycle(data: Data, child: number, parent: number) {
 	const seen = new Set<number>();
 	for (let at: number | undefined = parent; at !== undefined && !seen.has(at); ) {
@@ -577,7 +616,7 @@ export function parseData(value: unknown): Data {
 	if (d.tasks.some((t) => t.watch !== undefined && (typeof t.watch?.since !== "number" || !Number.isInteger(t.watch.checks)))) fail("The data file is damaged.");
 	if (!d.order || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	if (d.labels.some((l) => !Array.isArray(l?.values) || l.values.some((v) => typeof v?.text !== "string" || !isHue(v.color)))) fail("The data file is damaged.");
-	if (!Array.isArray(d.filters)) fail("The data file is damaged.");
+	if (!Array.isArray(d.filters) || !SUBTASK_MODES.includes(d.subtasks)) fail("The data file is damaged.");
 	// The filter row follows the labels (it's repaired, not refused).
 	d.filters = normalizeFilters(d);
 	return d;
@@ -663,8 +702,14 @@ export function upgrade4to5(old: any, random?: () => number): Omit<Data, "schema
  * as the list looked; Due and each label after it), and archived tasks remember when they were
  * archived (taken as their last change), so the Archived group can show newest first.
  */
-export function upgrade5to6(old: any): Data {
+export function upgrade5to6(old: any): Omit<Data, "schema" | "subtasks"> & { schema: 6 } {
 	if (!old || old.schema !== 5 || !Array.isArray(old.tasks) || !Array.isArray(old.labels)) fail("Expected schema 5 data.");
 	const tasks = old.tasks.map((t: any) => (t.archived && t.archivedAt === undefined ? { ...t, archivedAt: t.updated } : t));
-	return { ...old, schema: SCHEMA, tasks, filters: normalizeFilters({ labels: old.labels, filters: old.filters }) };
+	return { ...old, schema: 6, tasks, filters: normalizeFilters({ labels: old.labels, filters: old.filters }) };
+}
+
+/** Schema 6 → 7: how subtasks show is saved; it starts Off, as the list looked. */
+export function upgrade6to7(old: any): Data {
+	if (!old || old.schema !== 6 || !Array.isArray(old.tasks)) fail("Expected schema 6 data.");
+	return { ...old, schema: SCHEMA, subtasks: SUBTASK_MODES.includes(old.subtasks) ? old.subtasks : "off" };
 }

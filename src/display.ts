@@ -2,7 +2,7 @@
 // both narrows the list and, for the filters whose Group by is on, nests it into groups in the
 // row's order. Pure: no I/O, no SDK runtime; the settings live in the data file.
 import type { Section } from "@toolbelt/sdk";
-import { dueAt, type Data, type Label, type Task, type TaskState } from "./model";
+import { dueAt, parentOf, type Data, type Label, type SubtaskMode, type Task, type TaskState } from "./model";
 
 /** One filter of the row: which values it shows (none: all) and whether it groups. */
 export type FilterSetting = { id: string; group: boolean; selected: string[] };
@@ -177,7 +177,7 @@ export type Looks = {
  * Archived start collapsed. A section's id is its path of `<filter code>=<value>` segments, so
  * a drop names every value it means.
  */
-export function groupTasks(data: Data, tasks: Task[], now: number, looks: Looks): { sections: Section[]; groupOf: Map<number, string> } {
+export function groupTasks(data: Data, tasks: Task[], now: number, looks: Looks, placedBy: Map<number, Task> = new Map()): { sections: Section[]; groupOf: Map<number, string> } {
 	const levels = data.filters.filter((f) => f.group);
 	const groupOf = new Map<number, string>();
 	if (!levels.length) return { sections: [], groupOf };
@@ -196,7 +196,8 @@ export function groupTasks(data: Data, tasks: Task[], now: number, looks: Looks)
 			const leaf = depth === levels.length - 1;
 			return { id: id.join("/"), ...look, order: leaf ? look.order : look.order === false ? false : "fixed", ...(sections.length && { sections }) };
 		};
-		const by = (value: string) => pool.filter((t) => valueOf(data, f.id, t, now) === value);
+		// A task goes where `placedBy` says (its top parent, following it), else where it is.
+		const by = (value: string) => pool.filter((t) => valueOf(data, f.id, placedBy.get(t.id) ?? t, now) === value);
 		if (f.id === STATUS) {
 			const out: Section[] = [];
 			const progressing = PROGRESSING_STATES.filter((v) => shownValues.includes(v));
@@ -242,3 +243,63 @@ export function dropTarget(sectionId: string): Map<string, string> {
 
 /** The state a Status value means (Archived is a flag: the task keeps its state). */
 export const stateOf = (value: string): TaskState | undefined => (value === "archived" || !(STATUS_VALUES as readonly string[]).includes(value) ? undefined : (value as TaskState));
+
+// ── subtasks ────────────────────────────────────────────────────────────
+
+/** A task's top parent: the last ancestor up its Parent chain. */
+export function rootOf(data: Data, task: Task): Task {
+	const seen = new Set<number>([task.id]);
+	let at = task;
+	for (let p = parentOf(data, at.id); p !== undefined && !seen.has(p); p = parentOf(data, at.id)) {
+		seen.add(p);
+		at = data.tasks.find((t) => t.id === p)!;
+	}
+	return at;
+}
+
+/**
+ * Following their parent (`parent`): each shown task is placed by its top parent, when that one
+ * is shown too. Other modes place every task by itself.
+ */
+export function placement(data: Data, shown: Task[], mode: SubtaskMode): Map<number, Task> {
+	const out = new Map<number, Task>();
+	if (mode !== "parent") return out;
+	const ids = new Set(shown.map((t) => t.id));
+	for (const t of shown) {
+		const root = rootOf(data, t);
+		if (root.id !== t.id && ids.has(root.id)) out.set(t.id, root);
+	}
+	return out;
+}
+
+/** A task in a group's tree; `context` when it's only there for the tasks under it. */
+export type TreeNode = { task: Task; context: boolean; children: TreeNode[] };
+
+/**
+ * One group's tasks as a forest: each task under its parent, and a parent that isn't in the
+ * group shown there as context, up to the top. Roots come in the order of their first task;
+ * children in table order.
+ */
+export function forest(data: Data, tasks: Task[]): TreeNode[] {
+	const inGroup = new Set(tasks.map((t) => t.id));
+	const nodes = new Map<number, TreeNode>();
+	const roots: TreeNode[] = [];
+	const ensure = (task: Task, depth = 0): TreeNode => {
+		const had = nodes.get(task.id);
+		if (had) return had;
+		const node: TreeNode = { task, context: !inGroup.has(task.id), children: [] };
+		nodes.set(task.id, node);
+		const p = depth < 64 ? parentOf(data, task.id) : undefined;
+		const parent = p === undefined ? undefined : data.tasks.find((t) => t.id === p);
+		if (parent) ensure(parent, depth + 1).children.push(node);
+		else roots.push(node);
+		return node;
+	};
+	for (const t of tasks) {
+		const n = nodes.get(t.id);
+		// Made earlier as some task's context, it turns out to be in the group itself.
+		if (n) n.context = false;
+		else ensure(t);
+	}
+	return roots;
+}

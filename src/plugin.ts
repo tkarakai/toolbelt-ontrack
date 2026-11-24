@@ -244,12 +244,35 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 				if (task?.unread) markReadLater(task.id);
 				return false;
 			}
-			case "reorder":
+			case "reorder": {
+				// Onto a task: it becomes that task's subtask.
+				if (p?.onto !== undefined && p.onto !== null) {
+					const parent = Number(p.onto);
+					model.setParent(data, rowId(), parent, t);
+					offerUndo(c, `#${rowId()} is now a subtask of #${parent}`, before);
+					return true;
+				}
 				return dropInto(model.findTask(data, rowId()), String(p?.section ?? ""), p?.before ? Number(p.before) : null, c, surface, before);
+			}
+			// ⌥→ goes under the task above; ⌥← moves out to the parent's parent.
+			case "indent": {
+				const under = Number(p?.target);
+				if (!Number.isInteger(under)) throw new InvalidInput("There's no task above to go under.");
+				model.setParent(data, rowId(), under, t);
+				offerUndo(c, `#${rowId()} is now a subtask of #${under}`, before);
+				return true;
+			}
+			case "outdent": {
+				const parent = model.parentOf(data, rowId());
+				if (parent === undefined) throw new InvalidInput("It's not a subtask.");
+				model.setParent(data, rowId(), model.parentOf(data, parent) ?? null, t);
+				offerUndo(c, `Moved #${rowId()} out a level`, before);
+				return true;
+			}
 			case "undo":
 				if (!undo || undo.until < t || p?.token !== undo.token) throw new InvalidInput(undo && undo.until >= t ? "Only the latest change can be undone." : "Too late to undo.");
 				// Undo reverts the change, not filtering or grouping chosen since.
-				data = { ...undo.data, filters: data.filters };
+				data = { ...undo.data, filters: data.filters, subtasks: data.subtasks };
 				data.filters = display.normalizeFilters(data);
 				undo = undefined;
 				return true;
@@ -257,7 +280,10 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 				const value = fieldValue(p?.value);
 				// The details drawer edits the task in place: each field saves on its own.
 				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, before);
-				if (dialog?.kind === "task" && p?.form === "task") {
+				if (p?.form === "subtasks") {
+					if (model.SUBTASK_MODES.includes(value as model.SubtaskMode)) data.subtasks = value as model.SubtaskMode;
+					viewChanged = true;
+				} else if (dialog?.kind === "task" && p?.form === "task") {
 					if (p.field === "labels") dialog.draft.labels = fromTagValues(Array.isArray(value) ? value : []);
 					else if (p.field === "name" || p.field === "due" || p.field === "desc") dialog.draft[p.field as "name"] = String(value);
 				} else if (dialog?.kind === "relate" && p?.form === "relate") {

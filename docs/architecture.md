@@ -28,9 +28,23 @@ Snooze menu), `ui.rich-fields`, `ui.row-select`, `ui.row-reorder`, `ui.modifier-
 `ui.timeline` (update timelines), `ui.row-pane` (the editable details drawer), `ui.composer`
 (update boxes, the quick view's New task line and its Add update prompt), `assets` (state
 icons), `ui.sub-sections` (Progressing), `ui.toast-key` (⌘Z for Undo), `ui.options-field` (label
-values), `ui.nested-sections` (grouping levels, the dimmed Archived group) and `ui.filter-group`
-(the filter row). The package is portable JavaScript, uses SDK 0.3.12 and needs Toolbelt 0.3.17
-or newer.
+values), `ui.nested-sections` (grouping levels, the dimmed Archived group), `ui.filter-group` (the filter
+row), `ui.row-tree` (subtask rows, context rows, drops onto tasks) and `ui.choice-control` (the
+Subtasks menu). The package is portable JavaScript, uses SDK 0.3.13 and needs Toolbelt 0.3.18 or
+newer.
+
+### Subtasks
+
+A task's parent is the first Parent relation it holds (`parentOf`); `setParent` replaces it,
+refusing cycles. `data.subtasks` (`off`, `own`, `parent`) comes from the `subtasks` choice
+control. With subtasks on, `display.forest` turns each group's tasks into a tree: a task under its
+parent, and a parent that isn't in the group as a context node, up to the top. Rows nest as
+`Row.children` (started open); a context row is `c<task>@<group>` with `context: "<task>"`, no
+actions and an "In <state>" line. Following their parent, `placement` puts each shown task in its
+top parent's group (`groupTasks` reads that task's values) and nested rows carry their own state
+as a tag. Parents carry a `settled/total` tag. `indent` (⌥→, its `targets` the task above) and
+`outdent` (⌥←) set the parent; a `reorder` with `onto` (the table's `reorderOnto`) does too. Each
+offers Undo.
 
 ### Filters and grouping
 
@@ -120,14 +134,14 @@ on, and the lifecycle actions.
 | `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6 → 7. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 6 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+Schema 7 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
 `relationTypes`, `order` (`inbox`, `working`: task ids in the person's order) and `filters` (the
-filter row, above). IDs
+filter row, above) and `subtasks` (how subtasks show). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
@@ -183,7 +197,7 @@ reused when one of that name exists, only if some task was pinned) and schema 4 
 values become `{text, color}` with colors it uses least, and values tasks typed into a free-text
 label join its list, A–Z, after the listed ones; labels keep showing one color) and schema 5 (the
 filter row starts as the list looked: Status grouping and showing Ongoing, then Due and each
-label; archived tasks get `archivedAt` from `updated`).
+label; archived tasks get `archivedAt` from `updated`) and schema 6 (`subtasks` starts `off`).
 
 ## Tests
 

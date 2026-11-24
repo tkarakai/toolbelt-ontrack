@@ -200,8 +200,11 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	const five = m.upgrade4to5(four);
 	expect(() => m.upgrade4to5(five)).toThrow(m.InvalidInput);
 	const six = m.upgrade5to6(five);
-	expect(m.parseData(JSON.parse(JSON.stringify(six)))).toEqual(JSON.parse(JSON.stringify(six)));
 	expect(() => m.upgrade5to6(six)).toThrow(m.InvalidInput);
+	const seven = m.upgrade6to7(six);
+	expect(seven.subtasks).toBe("off");
+	expect(m.parseData(JSON.parse(JSON.stringify(seven)))).toEqual(JSON.parse(JSON.stringify(seven)));
+	expect(() => m.upgrade6to7(seven)).toThrow(m.InvalidInput);
 	expect(four.order).toEqual({ inbox: [1], working: [] });
 	expect(four.tasks.some((t: any) => "pinned" in t)).toBe(false);
 	expect(four.labels).toEqual(three.labels); // nothing was pinned, so no label
