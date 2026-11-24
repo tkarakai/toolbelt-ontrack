@@ -2,12 +2,12 @@
 // saved immediately, and the open surfaces re-render. In active mode a timer wakes snoozed
 // tasks, brings watched tasks back for their check-ins and announces due dates; probe mode
 // starts no timers.
-import { HUES, type Context, type Hue, type PluginDefinition } from "@toolbelt/sdk";
+import { HUES, type Context, type Hue, type PluginDefinition, type TagValue } from "@toolbelt/sdk";
 import * as display from "./display";
 import * as life from "./lifecycle";
 import * as model from "./model";
 import { InvalidInput, type Data } from "./model";
-import { applyValues, attention, fieldValue, fromTagValues, initialView, labelDraft, labelInput, quickView, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
+import { applyValues, attention, fieldValue, fromTagValues, initialView, labelDraft, labelInput, newTaskStart, quickView, relatedEntries, relatedId, REPEATS, setRepeat, settingsScreen, snoozeDialog, tasksScreen, updateDraft, watchDialog, type View } from "./ui";
 
 export type Options = { load(): Data; save(data: Data): void; now?: () => number; readAfterMs?: number };
 
@@ -132,7 +132,7 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	 * A drag into a group: the drop means every value along the group's path. Labels and the due
 	 * date change first; then Archived archives (out of it unarchives), and a state is that move,
 	 * like its key (`moveTo`, so Snoozed and Watching open their dialog). Within the task's own
-	 * Inbox or Working on it the drop reorders. One Undo covers it all.
+	 * Inbox or Working on the drop reorders. One Undo covers it all.
 	 */
 	function dropInto(task: model.Task, section: string, at: number | null, c: Context, surface: string, before: Data): boolean {
 		const t = now();
@@ -171,7 +171,7 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 		if (wasArchived && to) life.unarchive(data, task.id, t);
 		const place = to === "inbox" || to === "working" ? at : null;
 		if (!to || to === task.state) {
-			// Its own state: a drop reorders Inbox and Working on it.
+			// Its own state: a drop reorders Inbox and Working on.
 			if (to) life.drop(data, task.id, to, place, t);
 			if (edited || (wasArchived && to)) offerUndo(c, wasArchived && to ? `Unarchived #${task.id}` : `Moved #${task.id}`, before);
 			return true;
@@ -191,10 +191,32 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 			return moveTo(task, to, c, "screen:tasks", before);
 		}
 		const input = { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } };
-		if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? value : []);
+		if (field === "related") return editRelations(task, Array.isArray(value) ? (value as TagValue[]) : [], c, before);
+if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? value : []);
 		else if (field === "name" || field === "due" || field === "desc") input[field] = String(value);
 		else return false;
 		model.updateTask(data, task.id, input, t);
+		return true;
+	}
+
+	/**
+	 * The drawer's Related field changed: relations it no longer shows are removed, and those
+	 * it newly shows are made (a new Parent replaces the old one). One Undo covers it.
+	 */
+	function editRelations(task: model.Task, next: TagValue[], c: Context, before: Data): boolean {
+		const t = now();
+		const current = relatedEntries(data, task.id);
+		const same = (a: TagValue, b: TagValue) => a.key === b.key && relatedId(a.value) === relatedId(b.value);
+		const removed = current.filter((e) => !next.some((n) => same(n, e.value)));
+		const added = next.filter((n) => typeof n?.key === "string" && !current.some((e) => same(n, e.value)));
+		for (const { relation: r } of removed) model.unrelate(data, r.holder, r.type, r.inverse ? task.id : r.task, t);
+		for (const n of added) {
+			const to = relatedId(n.value);
+			if (to === undefined) throw new InvalidInput("Choose a task.");
+			model.relate(data, task.id, n.key.replace(/^~/, ""), to, n.key.startsWith("~"), t);
+		}
+		if (!removed.length && !added.length) return false;
+		offerUndo(c, `Changed the relations of #${task.id}`, before);
 		return true;
 	}
 
@@ -285,6 +307,8 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 					viewChanged = true;
 				} else if (dialog?.kind === "task" && p?.form === "task") {
 					if (p.field === "labels") dialog.draft.labels = fromTagValues(Array.isArray(value) ? value : []);
+else if (p.field === "state" && life.STATES.includes(value as model.TaskState)) dialog.start = { ...(dialog.start ?? newTaskStart()), state: value as model.TaskState };
+else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStart()), related: Array.isArray(value) ? (value as TagValue[]).filter((v) => typeof v?.key === "string") : [] };
 					else if (p.field === "name" || p.field === "due" || p.field === "desc") dialog.draft[p.field as "name"] = String(value);
 				} else if (dialog?.kind === "relate" && p?.form === "relate") {
 					if (p.field === "type") dialog.type = String(value);
@@ -344,7 +368,7 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 				return life.move(data, rowId(), name === "up" ? -1 : 1, t);
 			// ── editing ──
 			case "new-task":
-				view.dialog = { kind: "task", draft: { name: "", due: "", desc: "", labels: {} } };
+				view.dialog = { kind: "task", draft: { name: "", due: "", desc: "", labels: {} }, start: newTaskStart() };
 				return false;
 			case "edit": {
 				const task = model.findTask(data, rowId());
@@ -436,9 +460,17 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 					if (dialog.id) model.updateTask(data, dialog.id, dialog.draft, t);
 					else {
 						// Land on the new task in the list once the dialog closes.
+						const start = dialog.start ?? newTaskStart();
+						const related = start.related.map((r) => ({ type: r.key.replace(/^~/, ""), inverse: r.key.startsWith("~"), to: relatedId(r.value) }));
+						if (related.some((r) => r.to === undefined || !data.tasks.some((x) => x.id === r.to))) throw new InvalidInput("A related task no longer exists.");
 						const task = model.addTask(data, dialog.draft, t);
+						for (const r of related) model.relate(data, task.id, r.type, r.to!, r.inverse, t);
 						view.dialog = undefined;
 						c.navigate("tasks", { select: String(task.id) });
+						// Its starting state: Snoozed and Watching ask when, in their dialog, on the new task.
+						if (start.state === "snoozed") view.dialog = snoozeDialog(task, t);
+						else if (start.state === "watching") view.dialog = watchDialog(task, t);
+						else if (start.state !== "inbox") life.transition(data, task.id, start.state, {}, t);
 						return true;
 					}
 				} else if (dialog.kind === "relate") {

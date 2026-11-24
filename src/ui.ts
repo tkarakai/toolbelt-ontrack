@@ -2,17 +2,61 @@
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { DUE, DUE_BUCKETS, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
-import { colorOf, dueAt, nextValueColor, parentOf, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { DUE, DUE_BUCKETS, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
+import { colorOf, dueAt, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
-	| { kind: "task"; id?: number; draft: TaskInput; error?: string }
+	| { kind: "task"; id?: number; draft: TaskInput; start?: NewTaskStart; error?: string }
 	| { kind: "relate"; from: number; type: string; to: string; error?: string }
 	| { kind: "snooze"; id: number; until: string; error?: string }
 	| WatchDialog
 	| { kind: "label"; id?: number; draft: LabelDraft; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
 	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
+
+/**
+ * What a new task starts with besides its fields: its workflow state and relations, as the
+ * Related field holds them (key: a relation type's id, `~` before it for its inverse; value:
+ * `#<id> <name>`).
+ */
+export type NewTaskStart = { state: Task["state"]; related: TagValue[] };
+export const newTaskStart = (): NewTaskStart => ({ state: "inbox", related: [] });
+
+/** A task as the Related field names it. */
+export const relatedValue = (task: Pick<Task, "id" | "name">) => `#${task.id} ${task.name}`;
+/** The task a Related value names, if any. */
+export const relatedId = (value: string | undefined) => {
+	const m = /^#(\d+)\b/.exec(value ?? "");
+	return m ? Number(m[1]) : undefined;
+};
+
+/**
+ * Relation types as the Related field's keys: each type, and its inverse when it reads
+ * differently ("Child" for Parent). A task has one parent; the rest take several tasks.
+ */
+export function relatedKeys(data: Data, except?: number): TagKey[] {
+	const values = tableOrder(data).filter((t) => t.id !== except).map(relatedValue);
+	return data.relationTypes.flatMap((t): TagKey[] => [
+		{ key: t.id, label: t.name, values, ...(t.id !== "parent" && { multiple: true }) },
+		...(t.inverse === t.name ? [] : [{ key: `~${t.id}`, label: t.inverse, values, multiple: true }]),
+	]);
+}
+
+/**
+ * A task's relations as the Related field shows them, each with the relation it stands for:
+ * one it holds under its type's key, one held by the other task under the inverse's (`~type`;
+ * the type's own when it reads the same both ways).
+ */
+export function relatedEntries(data: Data, id: number): { value: TagValue; relation: SeenRelation }[] {
+	const types = new Map(data.relationTypes.map((t) => [t.id, t]));
+	return relationsOf(data, id).flatMap((r) => {
+		const other = data.tasks.find((t) => t.id === r.task);
+		if (!other) return [];
+		const t = types.get(r.type);
+		const key = r.inverse && t && t.inverse !== t.name ? `~${r.type}` : r.type;
+		return [{ value: { key, value: relatedValue(other) }, relation: r }];
+	});
+}
 
 /**
  * A label being edited. Each value has a key for the list editor: `v:` and its text when the
@@ -132,12 +176,35 @@ const NONE = "__none";
 // ── shared helpers ──────────────────────────────────────────────────────
 
 /** The task's labels as colored pills, in label order. Yes/no labels show their name. */
-export function tags(data: Data, task: Task): Tag[] {
-	return data.labels.flatMap((label) => {
+export function tags(data: Data, task: Task, labels: Label[] = data.labels): Tag[] {
+	return labels.flatMap((label) => {
 		const value = task.labels[label.id];
 		if (value === undefined) return [];
 		return [{ text: value === true ? label.name : String(value), color: colorOf(label, value), tooltip: value === true ? undefined : label.name, shade: shadeOf(label, value) }];
 	});
+}
+
+/**
+ * What a group's header already says about its tasks (each grouping filter's value along the
+ * section id), so a row in it doesn't repeat it as a pill.
+ */
+const groupSays = (group: string | undefined) => (group ? dropTarget(group) : new Map<string, string>());
+
+/** The task's state as a pill (Archived for an archived one), styled like its group header. */
+const stateTag = (task: Task): Tag => {
+	const status = statusOf(task);
+	return { text: STATUS_LABELS[status], icon: status === "archived" ? "archive" : STATE_ICONS[task.state] };
+};
+
+/**
+ * A row's pills: its state unless the group already says it, then its labels except those the
+ * group already says (a task following its parent may differ from its group, and then says so).
+ * `always`: the state shows regardless (a context row, which is elsewhere because of it).
+ */
+function rowTags(data: Data, task: Task, says: Map<string, string>, now: number, always = false): Tag[] {
+	const state = always || says.get(STATUS) !== statusOf(task) ? [stateTag(task)] : [];
+	const said = (label: Label) => says.get(`label:${label.id}`) === valueOf(data, `label:${label.id}`, task, now);
+	return [...state, ...tags(data, task, data.labels.filter((l) => !said(l)))];
 }
 
 /** The description's first line as plain text. */
@@ -225,7 +292,8 @@ export function taskActions(now: number): Action[] {
 		// Both go into the details drawer when it's showing; otherwise they open a dialog.
 		{ id: "edit", label: "Edit", icon: "pencil", key: "e", group: "edit", focus: "name" },
 		{ id: "add-update", label: "Add update", icon: "message-square-plus", key: "shift+u", group: "edit", focus: "update" },
-		{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit" },
+		// In the drawer, R goes to its Related field; otherwise it opens a dialog.
+{ id: "relate", label: "Relate to…", icon: "link", key: "r", group: "edit", focus: "related" },
 		{ id: "unrelate", label: "Remove relation", icon: "unlink", group: "edit" },
 		{ id: "mark-unread", label: "Mark unread", icon: "mail", key: "u", group: "edit" },
 		{ id: "mark-read", label: "Mark read", icon: "mail-open", key: "u", group: "edit" },
@@ -235,7 +303,7 @@ export function taskActions(now: number): Action[] {
 		{ id: "down", label: "Move down", icon: "arrow-down", key: "alt+down", group: "order" },
 		{ id: "archive", label: "Archive", icon: "archive", key: "a", group: "other" },
 		{ id: "unarchive", label: "Unarchive", icon: "archive-restore", key: "a", group: "other" },
-		{ id: "delete", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this task and its relations?", group: "other" },
+		{ id: "delete", label: "Delete", icon: "trash-2", tone: "destructive", confirm: "Delete this task and its relations?", group: "danger" },
 	];
 }
 
@@ -278,7 +346,7 @@ export const STATE_ICONS = {
 
 /**
  * How each group looks and takes drops. Status groups are the states' sections, as before:
- * Progressing holds Working on it, Snoozed and Watching (a drop on it starts work), Settled starts
+ * Progressing holds Working on, Snoozed and Watching (a drop on it starts work), Settled starts
  * collapsed, and Archived, the last, starts collapsed and dimmed. A drop into a label's group sets
  * that value (into its No group clears it); into Today or No date sets or clears the due date.
  */
@@ -287,7 +355,7 @@ export const LOOKS: Looks = {
 		(({
 			inbox: { label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
 			progressing: { label: "Progressing", icon: STATE_ICONS.progressing, dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
-			working: { label: "Working on it", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+			working: { label: "Working on", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
 			snoozed: { label: "Snoozed", icon: STATE_ICONS.snoozed, empty: "Nothing snoozed", order: "fixed", dropLabel: "Snooze…", dropIcon: STATE_ICONS.snoozed },
 			watching: { label: "Watching", icon: STATE_ICONS.watching, empty: "Nothing to watch", order: "fixed", dropLabel: "Watch…", dropIcon: STATE_ICONS.watching },
 			settled: { label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
@@ -304,7 +372,9 @@ export const LOOKS: Looks = {
 	label: (label, value) => {
 		const none = value === NO_VALUE;
 		const name = label.type === "bool" ? (none ? `Not ${label.name}` : label.name) : none ? `No ${label.name}` : value;
-		return { label: name, order: "fixed", dropLabel: none ? `Clear ${label.name}` : label.type === "bool" ? label.name : `${label.name}: ${value}`, dropIcon: label.type === "bool" ? "toggle-left" : "tag" };
+		// The value as its pill, the way rows show it, so it reads the same in the header.
+const pill = none ? undefined : label.type === "bool" ? { color: label.color } : { color: colorOf(label, value), shade: shadeOf(label, value) };
+return { label: name, ...(pill && { pill }), order: "fixed", dropLabel: none ? `Clear ${label.name}` : label.type === "bool" ? label.name : `${label.name}: ${value}`, dropIcon: label.type === "bool" ? "toggle-left" : "tag" };
 	},
 };
 
@@ -344,12 +414,12 @@ function whenCell(task: Task): Cell {
  * A task's row in its group; an overdue one carries a red dot, one brought back by a check-in an
  * eye mark, and an archived one, wherever it shows, an archive mark and dimmed text.
  */
-function taskRow(data: Data, task: Task, now: number, group?: string, tree?: RowTree): Row {
+function taskRow(data: Data, task: Task, now: number, group?: string, tree?: RowTree, says: Map<string, string> = groupSays(group)): Row {
 	const relations = relationsOf(data, task.id);
-	const kids = data.tasks.filter((t) => parentOf(data, t.id) === task.id);
-	const settledKids = kids.filter((t) => t.state === "settled" || t.archived).length;
+	const pills = rowTags(data, task, says, now);
 	const marks = [
-		...(task.archived ? [{ icon: "archive", tooltip: "Archived" }] : []),
+		// An archived task outside Archived says so; its Archived pill does when it has one.
+		...(task.archived && says.get(STATUS) !== "archived" && !pills.some((p) => p.icon === "archive") ? [{ icon: "archive", tooltip: "Archived" }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
 	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
@@ -357,22 +427,23 @@ function taskRow(data: Data, task: Task, now: number, group?: string, tree?: Row
 		id: String(task.id),
 		group,
 		unread: task.unread || undefined,
+		// Overdue: a red dot beside the unread one, before the title, so titles line up.
+		dot: overdueDot(task, now),
 		// The first cell titles the details drawer.
 		cells: {
 			name: {
 				text: task.name,
-				dot: overdueDot(task, now),
+				// Its id, as a quiet pill in front of the title.
+				prefix: { text: `#${task.id}` },
 				tone: isOverdue(task, now) ? "danger" : task.archived ? "muted" : undefined,
 				tags: [
-					// Following its parent, a subtask may sit in another state's group: it says its own.
-					...(tree?.ownState ? [{ text: STATUS_LABELS[statusOf(task)], icon: statusOf(task) === "archived" ? "archive" : STATE_ICONS[task.state] }] : []),
-					...tags(data, task),
-					...(kids.length ? [{ text: `${settledKids}/${kids.length}`, icon: "list-tree", tooltip: `${settledKids} of ${kids.length} subtask${kids.length === 1 ? "" : "s"} settled` }] : []),
+					// Its state and labels, except what its group's header already says.
+					...pills,
+					...kidsTag(data, task),
 				],
 				sub,
 				marks: marks.length ? marks : undefined,
 			},
-			id: { text: `#${task.id}`, mono: true },
 			due: dueCell(task, now),
 			when: whenCell(task),
 		},
@@ -389,25 +460,37 @@ function taskRow(data: Data, task: Task, now: number, group?: string, tree?: Row
 	};
 }
 
-/** Where a row sits in its group's tree: the rows under it, the task above it (⌥→ goes under that one), and whether it says its own state. */
-type RowTree = { children: Row[]; under?: Task; ownState?: boolean };
+/** A parent's `settled/total` pill. */
+function kidsTag(data: Data, task: Task): Tag[] {
+	const kids = data.tasks.filter((t) => parentOf(data, t.id) === task.id);
+	if (!kids.length) return [];
+	const settled = kids.filter((t) => t.state === "settled" || t.archived).length;
+	return [{ text: `${settled}/${kids.length}`, icon: "list-tree", tooltip: `${settled} of ${kids.length} subtask${kids.length === 1 ? "" : "s"} settled` }];
+}
+
+/** Where a row sits in its group's tree: the rows under it and the task above it (⌥→ goes under that one). */
+type RowTree = { children: Row[]; under?: Task };
 
 /**
  * A group's rows as a tree (subtasks on): each task under its parent, a parent that's elsewhere
- * shown dimmed for context (`Row.context`, its id `c<task>@<group>`). Following their parent,
- * nested tasks say their own state.
+ * shown dimmed for context (`Row.context`, its id `c<task>@<group>`) with its state pill. Nested
+ * rows say what differs from their group (`key`): following its parent, a subtask's own state.
  */
-function treeRows(data: Data, nodes: TreeNode[], group: string | undefined, now: number, mode: SubtaskMode, depth = 0): Row[] {
+function treeRows(data: Data, nodes: TreeNode[], group: string | undefined, now: number, key = group): Row[] {
+	const says = groupSays(key);
 	return nodes.map((n, i) => {
-		const children = treeRows(data, n.children, undefined, now, mode, depth + 1);
+		const children = treeRows(data, n.children, undefined, now, key);
 		const under = i > 0 ? nodes[i - 1]!.task : undefined;
-		if (!n.context) return taskRow(data, n.task, now, group, { children, under, ownState: mode === "parent" && depth > 0 });
+		if (!n.context) return taskRow(data, n.task, now, group, { children, under }, says);
+		// A parent shown here for context acts as the task itself (`contextSelect`): the same
+		// cells, actions and drawer, its events naming the task. Its state always shows: it's
+		// why the parent isn't in this group.
+		const real = taskRow(data, n.task, now, group, { children }, says);
 		return {
+			...real,
 			id: `c${n.task.id}@${group ?? ""}`,
 			context: String(n.task.id),
-			group,
-			cells: { name: { text: n.task.name, sub: `In ${STATUS_LABELS[statusOf(n.task)]}`, tags: tags(data, n.task) }, id: { text: `#${n.task.id}`, mono: true }, due: null, when: null },
-			actions: [],
+			cells: { ...real.cells, name: { ...(real.cells.name as Exclude<Cell, string | number | null>), tags: [...rowTags(data, n.task, says, now, true), ...kidsTag(data, n.task)] } },
 			children,
 			open: true,
 		};
@@ -421,6 +504,15 @@ const SUBTASK_OPTIONS: { value: SubtaskMode; label: string; description?: string
 	{ value: "parent", label: "Follow their parent", description: "The whole family sits with its top parent", section: "Subtask hierarchy" },
 ];
 
+/** Where a new task can start: anywhere (Snoozed and Watching ask for their details on save). */
+const NEW_STATES: { value: Task["state"]; label: string }[] = [
+	{ value: "inbox", label: "Inbox" },
+	{ value: "working", label: "Working on" },
+	{ value: "snoozed", label: "Snooze…" },
+	{ value: "watching", label: "Watching…" },
+	{ value: "settled", label: "Settled" },
+];
+
 /** The status picker's choices: where the task is now (with its moment), and where it can go. */
 function statusOptions(task: Task, now: number) {
 	const since = workingSince(task);
@@ -429,7 +521,7 @@ function statusOptions(task: Task, now: number) {
 	const reachable = (value: string) => value === task.state || TRANSITIONS[task.state].includes(value as Task["state"]);
 	return ([
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Working on it · since ${at(since)}` : "Working on it" },
+		{ value: "working", label: task.state === "working" && since ? `Working on · since ${at(since)}` : "Working on" },
 		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
 		{
 			value: "watching",
@@ -453,19 +545,18 @@ function watchFacts(task: Task, now: number) {
 		.join(" · ");
 }
 
-/** One quiet line of facts under the properties: id, time spent, when it was made and changed. */
+/** One quiet line of facts under the properties, when there are any: archived, time spent. */
 function factsLine(task: Task, now: number) {
 	const worked = timeSpent(task, now);
-	return [
-		`#${task.id}`,
-		task.archived ? "Archived" : undefined,
-		worked ? `${spent(worked)} worked in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` : undefined,
-		`Created ${stamp(task.created, now)}`,
-		task.updated - task.created > 60_000 ? `changed ${stamp(task.updated, now)}` : undefined,
-	]
-		.filter(Boolean)
-		.join(" · ");
+	return (
+		[task.archived ? "Archived" : undefined, worked ? `${spent(worked)} worked in ${task.sessions.length} session${task.sessions.length === 1 ? "" : "s"}` : undefined]
+			.filter(Boolean)
+			.join(" · ") || undefined
+	);
 }
+
+/** When the task was made and last changed. */
+const madeLine = (task: Task, now: number) => [`Created ${stamp(task.created, now)}`, task.updated - task.created > 60_000 ? `changed ${stamp(task.updated, now)}` : undefined].filter(Boolean).join(" · ");
 
 /**
  * The task's details drawer, edited in place: its name, status, due date, labels and description
@@ -473,7 +564,6 @@ function factsLine(task: Task, now: number) {
  * there). Each field saves on its own; nothing is repeated from elsewhere in the drawer.
  */
 export function taskPane(data: Data, task: Task, now: number): Node[] {
-	const relations = relationsOf(data, task.id);
 	const updates = updatesOf(task);
 	return [
 		...(task.unread && task.unreadReason ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
@@ -482,26 +572,19 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 			id: "task",
 			appearance: "inline",
 			fields: [
-				{ type: "text", id: "name", label: "Name", value: task.name, heading: true, placeholder: "What needs doing" },
+				{ type: "text", id: "name", label: "Name", value: task.name, heading: true, note: `#${task.id}`, placeholder: "What needs doing" },
 				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Workflow", value: task.state, options: statusOptions(task, now) }]),
 				{ type: "datetime", id: "due", label: isOverdue(task, now) ? "Overdue" : "Due", value: task.due ?? "", placeholder: "No due date" },
 				{ type: "tags", id: "labels", label: "Labels", value: toTagValues(task.labels), keys: tagKeys(data) },
+				// Relations are added like labels: + Add, the relation, then the task.
+				...(data.relationTypes.length ? [{ type: "tags" as const, id: "related", label: "Related", value: relatedEntries(data, task.id).map((e) => e.value), keys: relatedKeys(data, task.id) }] : []),
 				{ type: "textarea", id: "desc", label: "", value: task.desc, markdown: true, rows: 6, placeholder: "Add a description…" },
 			],
 		},
 		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
-		{ type: "text", text: factsLine(task, now), tone: "muted" },
-		...(relations.length
-			? [
-					{
-						type: "card" as const,
-						id: "related",
-						title: `Related · ${relations.length}`,
-						actions: [{ id: "relate", label: "Relate to…", icon: "plus" }],
-						children: [{ type: "details" as const, items: relations.map((r) => ({ label: r.label, value: taskName(data, r.task) })) }],
-					},
-				]
-			: []),
+		...(factsLine(task, now) ? [{ type: "text" as const, text: factsLine(task, now)!, tone: "muted" as const }] : []),
+		// When it was made and changed, just above its history.
+		{ type: "text", text: madeLine(task, now), tone: "muted" },
 		{
 			type: "card",
 			id: "updates",
@@ -573,7 +656,7 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 			const key = groupOf.get(t.id) ?? "";
 			groups.set(key, [...(groups.get(key) ?? []), t]);
 		}
-		rows = [...groups].flatMap(([key, tasks]) => treeRows(data, forest(data, tasks), key || undefined, now, mode));
+		rows = [...groups].flatMap(([key, tasks]) => treeRows(data, forest(data, tasks), key || undefined, now));
 	}
 	const filters = data.filters.map((f) => filterNode(data, f, pool, now));
 	const open = data.tasks.filter((t) => !t.archived && t.state !== "settled" && t.state !== "watching");
@@ -596,13 +679,14 @@ export function tasksScreen(data: Data, view: View, now: number): Node {
 				columns: [
 					// The first column titles the details drawer, so it's the name.
 					{ key: "name", title: "Task", grow: true },
-					{ key: "id", title: "#", mono: true, width: 64, priority: 4 },
 					{ key: "due", title: "Due", width: 176, priority: 2 },
 					{ key: "when", title: "When", width: 120, priority: 3 },
 				],
 				appearance: "document",
 				...(sections.length && { sections, reorder: true }),
-				...(mode !== "off" && { reorder: true, reorderOnto: "Make it a subtask" }),
+				...(mode !== "off" && { reorder: true, reorderOnto: "Make it a subtask", contextSelect: true }),
+// The drawer ends with the row's actions as buttons; its fields edit in place.
+paneButtons: true,
 				selectEvents: true,
 				// ↵ on a task writes an update in its drawer.
 				enter: "add-update",
@@ -747,6 +831,8 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 	switch (dialog.kind) {
 		case "task": {
 			const d = dialog.draft;
+			// A new task can start anywhere in the workflow and with relations, as the drawer sets them.
+			const start = dialog.id ? undefined : (dialog.start ?? newTaskStart());
 			return {
 				id: "task",
 				title: dialog.id ? `Edit #${dialog.id}` : "New task",
@@ -760,8 +846,12 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 						id: "task",
 						fields: [
 							{ type: "text", id: "name", label: "Name", value: d.name, placeholder: "What needs doing" },
+							...(start
+								? [{ type: "select" as const, id: "state", label: "Workflow", value: start.state, options: NEW_STATES, description: start.state === "snoozed" || start.state === "watching" ? "Saving asks when to bring it back." : undefined }]
+								: []),
 							{ type: "datetime", id: "due", label: "Due", value: d.due, placeholder: "No due date", description: "Optional. Without a time, it's due at the end of the day." },
 							{ type: "tags", id: "labels", label: "Labels", value: toTagValues(d.labels), keys: tagKeys(data) },
+							...(start && data.relationTypes.length ? [{ type: "tags" as const, id: "related", label: "Related", value: start.related, keys: relatedKeys(data) }] : []),
 							{ type: "textarea", id: "desc", label: "Description", value: d.desc, markdown: true, rows: 8, placeholder: "Markdown: # heading, **bold**, - list, [link](https://…)" },
 						],
 					},
@@ -995,7 +1085,7 @@ export function quickView(data: Data, now: number): Node {
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
-		const subtitle = since ?[`Working on it · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
+		const subtitle = since ?[`Working on · ${spent(now - since)}`, note ?? labels].filter(Boolean).join(" · ") : (t.unread && t.unreadReason) || note || labels || undefined;
 		return {
 			id: String(t.id),
 			title: t.name,
