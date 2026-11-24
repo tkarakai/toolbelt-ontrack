@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.14.0 — 2026-11-24
 - **Stalled**: a new state under Progressing for tasks you chose to work on but stopped touching. A task in Working on without an update or edit for 3 days moves to Stalled, unread, saying why (`Stalled · untouched 3 days · stalled 2× before`), and its work session ends. ⇧P (Mark stalled) or a drag into Stalled stalls a task yourself.
 - **Amber before it stalls**: after 2 days untouched, the task's When column says `Untouched 2 days` in amber, and its drawer says when it will stall.
 - **Reminders**: while a task stays stalled, it's marked unread again every day.
