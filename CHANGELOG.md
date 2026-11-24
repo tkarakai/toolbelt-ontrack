@@ -14,6 +14,7 @@
 - **Relations are edited like labels**: the drawer's Related field adds them with + Add (the relation, then a search for the task) and removes them with ×, with Undo. R goes there. When it was created and changed now sits on its own line, just above Updates.
 - **New task** can set where the task starts in the Workflow (Snoozed and Watching ask when on save) and its related tasks.
 - The label editor's fields line up, with "Allow free-form values" wrapping.
+- Requires Toolbelt 0.3.19 (SDK 0.3.14). Data schema 7.
 
 ## 0.10.0 — 2026-11-24
 - **Subtasks nest under their parent.** A new **Subtasks** menu after the filters: Off, or a subtask hierarchy where subtasks either **stay in their own group** (a parent that's elsewhere shows dimmed above them, saying where it is) or **follow their parent** (the whole family sits with its top parent, each subtask showing its own state). Saved like the filters.
