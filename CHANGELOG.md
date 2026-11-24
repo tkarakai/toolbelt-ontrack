@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.11.0 — 2026-11-24
 - **Rows don't repeat their group.** Grouped by a label, a task no longer shows that label's pill; the header already says it.
 - **Workflow state as a pill.** When Workflow isn't grouping, every task shows its state as a pill before its labels. A parent shown dimmed in another group (subtasks staying in their own group) shows its state the same way instead of an "In …" line, and a subtask following its parent shows its state only when it differs from the group's.
 - **Working on it** is now **Working on**.
