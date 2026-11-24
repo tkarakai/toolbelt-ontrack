@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.13.0 — 2026-11-24
 - The Tasks header no longer shows the "N open · M watching · showing X" line. On Toolbelt 0.3.21 and later the header is always a single row: search, filters and Subtasks scroll sideways when they don't fit, and New task turns into an icon button on narrow windows.
 
 ## 0.12.1 — 2026-11-24
