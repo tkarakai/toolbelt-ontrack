@@ -16,6 +16,8 @@ export default {
 			},
 			async build() {
 				await run(["bun", "scripts/build.ts"]);
+				// Built on Linux, installed on Macs: refuse names that differ only by letter case.
+				await run(["bun", "scripts/check-case.ts", "--git", "dist/package"]);
 				return packagePlugin("dist/package", "artifacts", HOST_VERSION, []);
 			},
 		},

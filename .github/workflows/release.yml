@@ -68,14 +68,12 @@ jobs:
           path: release-candidate/
           if-no-files-found: error
           retention-days: 90
-  native:
+  verify:
     needs: [plan, build]
     if: always() && needs.plan.outputs.release == 'true' && needs.plan.outputs.product == 'plugin' && (needs.build.result == 'success' || needs.plan.outputs.reuse == 'true')
-    # The archive runs where its users run it: macOS, before publication.
-    strategy:
-      matrix:
-        runner: [macos-15]
-    runs-on: ${{ matrix.runner }}
+    # A portable plugin: the frozen archive is installed, started and rendered on Linux. The build
+    # already refuses paths that would collide on a Mac's case-insensitive disk.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -107,8 +105,8 @@ jobs:
     concurrency:
       group: release-publish-${{ github.repository }}
       cancel-in-progress: false
-    needs: [plan, build, native]
-    if: always() && needs.plan.outputs.release == 'true' && (needs.build.result == 'success' || needs.plan.outputs.reuse == 'true') && (needs.native.result == 'success' || needs.plan.outputs.product != 'plugin')
+    needs: [plan, build, verify]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.build.result == 'success' || needs.plan.outputs.reuse == 'true') && (needs.verify.result == 'success' || needs.plan.outputs.product != 'plugin')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

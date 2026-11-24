@@ -1,14 +1,14 @@
 # Changelog
 
 ## Unreleased
-
-## 0.12.0 — 2026-11-24
 - **Parent and Blocks are built in**: they can be renamed but not deleted, since subtasks and unblocking rely on them. Settings marks them with a lock and says what each does. If one was deleted before, it comes back.
 - **The drawer lists a task's Parent, Children, Blocked by and Blocks**, each task shown as in the table (state, ID, name, labels, due date, dots). Click one, or press ↵ on it, to go to that task.
 - **Related pills are links**: click a pill's name to go to that task.
 - Remove relation is gone from the actions; the Related field's × removes a relation.
 - The drawer's ID is a pill, like the table's.
 - Requires Toolbelt 0.3.20 (SDK 0.3.15).
+- 0.12.0 was never published (its release couldn't get a macOS runner); this release carries its changes.
+- Releases are now checked on Linux only, with a check for file names that would clash on a Mac's case-insensitive disk.
 
 ## 0.11.0 — 2026-11-24
 - **Rows don't repeat their group.** Grouped by a label, a task no longer shows that label's pill; the header already says it.

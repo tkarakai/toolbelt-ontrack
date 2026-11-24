@@ -14,7 +14,7 @@ commits the release request and opens a PR. --check validates/builds in temporar
 writing to GitHub or tracked files. Missing arguments fail without prompting.
 
 **Merging the validated release PR authorizes CI publication.** Ordinary feature merges do not
-publish. CI builds the exact merged source, tests the actual archives on supported native runners,
+publish. CI builds the exact merged source, tests the actual archives,
 freezes files/hashes, creates an annotated tag/draft, downloads and verifies every uploaded byte,
 then publishes. Stable releases become this repository's Latest; prereleases do not. The engine
 also uploads release-record.json. Local build/package commands never publish.
@@ -32,8 +32,10 @@ ranges and capabilities accurate. Update the exact public SDK URL and lockfile t
 upgrading tooling; publish compatible SDK/host prerequisites before consuming new functionality.
 Use isolated profiles, temporary homes and disposable resources for smoke tests.
 
-CI and release jobs run on Linux, including the candidate build and its smoke check; only the
-`native` job runs the frozen archive on macOS, the platform its users have, before publication.
+CI and release jobs all run on Linux; OnTrack is portable and needs no Mac runner. The `verify`
+job installs, starts and renders the frozen archive before publication. The build runs
+`scripts/check-case.ts` on the tracked files and the archive folder, refusing paths that would be
+the same file on a Mac's case-insensitive disk, which Linux can't otherwise notice.
 
 Retries accept `--pr <merged-release-PR>` or `--source <merge-SHA>` before tagging.
 The workflow forwards the optional source selector, retains its publisher from the
