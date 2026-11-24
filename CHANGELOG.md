@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- On a Related pill, only the task (#12 Its name) is the link to it; the relation ("Blocks:") opens the picker to choose another task again (Toolbelt 0.3.22 and later).
+- Hovering a task in the drawer's Parent, Children, Blocked by or Blocks lists no longer closes the drawer (fixed in Toolbelt 0.3.22).
+- Uses SDK 0.3.16.
 
 ## 0.13.0 — 2026-11-24
 - The Tasks header no longer shows the "N open · M watching · showing X" line. On Toolbelt 0.3.21 and later the header is always a single row: search, filters and Subtasks scroll sideways when they don't fit, and New task turns into an icon button on narrow windows.
