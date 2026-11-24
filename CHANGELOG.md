@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.9.0 — 2026-11-24
 - **Group the list by what matters to you.** Every filter in the toolbar (Status, the new Due, and each label) can also group the list: flip **Group by** at the top of its menu. Grouping filters line up first, numbered by level with › between them; drag a filter (or press ⌥← ⌥→ on it) to change the order, or across the divider to start or stop grouping by it. Groups nest in that order, up to 10 levels: Project › Status gives each project its own Inbox, Progressing and Settled.
 - **Due** groups and filters by Overdue, Today, Next 6 days, Later, Past (finished tasks with an earlier date) and No date, moving on by itself at midnight.
 - **Drag between groups to change things.** A drop into a label's group sets that value (its *No* group clears it), into Today or No date sets or clears the due date, and into a Status group is that move, as before. One Undo reverts the whole drop.
