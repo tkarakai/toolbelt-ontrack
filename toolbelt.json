@@ -47,7 +47,8 @@
       "ui.tag-open"
     ],
     "optional": [
-      "navigate"
+      "navigate",
+      "ui.list-inset"
     ]
   },
   "data": {
