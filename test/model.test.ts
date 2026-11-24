@@ -167,6 +167,16 @@ describe("relations", () => {
 		expect(() => m.deleteRelationType(d, "duplicates")).toThrow("1 task uses");
 		m.deleteRelationType(d, "duplicates2");
 	});
+
+	test("Parent and Blocks can be renamed but never deleted, and come back when missing", () => {
+		const d = m.seed();
+		m.saveRelationType(d, { id: "parent", name: "Epic", inverse: "Story" });
+		expect(d.relationTypes[0]).toEqual({ id: "parent", name: "Epic", inverse: "Story" });
+		expect(() => m.deleteRelationType(d, "parent")).toThrow("Epic is built in");
+		expect(() => m.deleteRelationType(d, "blocks")).toThrow("Blocks is built in");
+		const old = { ...m.seed(), relationTypes: m.seed().relationTypes.filter((t) => t.id === "relatedTo") };
+		expect(m.parseData(JSON.parse(JSON.stringify(old))).relationTypes.map((t) => t.id)).toEqual(["relatedTo", "parent", "blocks"]);
+	});
 });
 
 test("new tasks start in the Inbox, on top", () => {

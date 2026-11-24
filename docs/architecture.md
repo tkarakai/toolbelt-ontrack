@@ -33,9 +33,10 @@ values), `ui.nested-sections` (grouping levels, the dimmed Archived group), `ui.
 row), `ui.row-tree` (subtask rows, context rows, drops onto tasks), `ui.choice-control` (the
 Subtasks menu), `ui.context-select` (context rows act as their task), `ui.section-pill` (label
 groups as pills), `ui.row-dot` (the overdue dot), `ui.pane-buttons` (the drawer's buttons),
-`ui.tag-multiple` (the Related field), `ui.heading-note` (the id above the drawer's name) and
-`ui.cell-prefix` (the id pill before a task's name). The package is portable JavaScript, uses
-SDK 0.3.14 and needs Toolbelt 0.3.19 or newer.
+`ui.tag-multiple` (the Related field), `ui.heading-note` (the id above the drawer's name),
+`ui.cell-prefix` (the id pill before a task's name), `ui.list-open` (the drawer's relation
+lists) and `ui.tag-open` (Related pills as links). The package is portable JavaScript, uses SDK
+0.3.15 and needs Toolbelt 0.3.20 or newer.
 
 ### Subtasks
 
@@ -95,7 +96,16 @@ are the relation types and their inverses (`~<type>`), `multiple` except Parent,
 are tasks as `#<id> <name>` (`relatedKeys`, `relatedEntries`, `relatedId`). `editRelations`
 diffs it: relations it no longer shows are removed (from whichever task holds them), new ones
 are made, one Undo for the change. `relate` focuses it (`focus: "related"`); the Relate dialog
-remains for narrow windows. New task's dialog state carries `start` (`NewTaskStart`: the Workflow
+remains for narrow windows. In the drawer its `open` (`open-related`) follows a pill.
+
+`BUILT_IN_RELATIONS` in `src/model.ts` names the relation types code relies on: `parent`
+(subtasks: `parentOf`, `setParent`, `forest`, the settled count, "All subtasks are settled") and
+`blocks` (`afterSettle` unblocking). `deleteRelationType` refuses them, Settings offers them
+only Edit, and `parseData` adds back one that's missing. The drawer's `familyCards` list them
+(Parent, Children, Blocked by, Blocks) as `list`s whose items are `rel:<id>` with the task's
+state, id, labels, due date and dots; their `open` (`open-task`) and `open-related` both select
+the task's row (or a context row standing for it) with `navigate`, or say it's hidden by the
+search or filters. New task's dialog state carries `start` (`NewTaskStart`: the Workflow
 state and Related values); saving adds the task, relates it, then moves it (Snoozed and Watching
 open their dialog on the new task).
 

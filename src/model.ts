@@ -597,8 +597,20 @@ export function saveRelationType(data: Data, input: { id?: string; name: string;
 	data.relationTypes.push({ id, name, inverse });
 }
 
+/**
+ * Relation types the plugin itself relies on, by id: Parent makes subtasks, Blocks marks a task
+ * unread once nothing blocks it. They can be renamed but never deleted; a data file without one
+ * gets it back on load (`parseData`).
+ */
+export const BUILT_IN_RELATIONS: readonly (RelationType & { role: string })[] = [
+	{ id: "parent", name: "Parent", inverse: "Child", role: "Makes subtasks" },
+	{ id: "blocks", name: "Blocks", inverse: "Blocked by", role: "A blocked task comes back once nothing blocks it" },
+];
+export const isBuiltInRelation = (id: string) => BUILT_IN_RELATIONS.some((t) => t.id === id);
+
 export function deleteRelationType(data: Data, id: string) {
-	findRelationType(data, id);
+	const type = findRelationType(data, id);
+	if (isBuiltInRelation(id)) fail(`${type.name} is built in: rename it, but it can't be deleted.`);
 	const used = data.tasks.filter((t) => t.relations.some((r) => r.type === id)).length;
 	if (used) fail(`${used} task${used === 1 ? " uses" : "s use"} this relation type. Remove those relations first.`);
 	data.relationTypes = data.relationTypes.filter((t) => t.id !== id);
@@ -619,6 +631,8 @@ export function parseData(value: unknown): Data {
 	if (!Array.isArray(d.filters) || !SUBTASK_MODES.includes(d.subtasks)) fail("The data file is damaged.");
 	// The filter row follows the labels (it's repaired, not refused).
 	d.filters = normalizeFilters(d);
+	// Built-in relation types deleted before they were locked come back, under their own names.
+	for (const t of BUILT_IN_RELATIONS) if (!d.relationTypes.some((x) => x.id === t.id)) d.relationTypes.push({ id: t.id, name: t.name, inverse: t.inverse });
 	return d;
 }
 

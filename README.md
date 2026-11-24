@@ -120,7 +120,11 @@ The details drawer edits the selected task in place; there's no dialog to open. 
 - **Workflow**, **Due**, **Labels** and **Related**, which read as text until you point at them:
   pick a workflow state (Snooze asks until when), a due date, or add, change and remove label
   pills. Related works like Labels: **+ Add**, pick the relation (Parent, Child, Blocks…), then
-  search for the task; × removes one. Each change offers Undo.
+  search for the task; × removes one. Each change offers Undo. Click a Related pill's name to go
+  to that task.
+- The task's **Parent**, **Children** (with how many are settled), **Blocked by** and **Blocks**,
+  when it has any, each as a list showing what the table shows: state, ID, name, labels, due date
+  and dots. Click one (or ↵ on it) to go to that task in the list; the drawer follows.
 - The **description**, formatted: click it or press ↵ on it to edit the Markdown; leaving it or
   ⌘↵ saves, Esc puts it back.
 - A quiet line when it's archived or has time worked.
@@ -251,7 +255,10 @@ task.
 ### Relations
 
 A relation type has a name and how it reads from the other task: Parent/Child,
-Related to, Supersedes/Superseded by and Blocks/Blocked by to start with. A relation is stored
+Related to, Supersedes/Superseded by and Blocks/Blocked by to start with. **Parent** and
+**Blocks** are built in, marked with a lock in Settings: Parent makes subtasks, and Blocks
+brings a blocked task back, unread, once nothing blocks it. Rename them as you like (Epic/Story,
+say); they can't be deleted. A relation is stored
 once and shown on both tasks. A task can't be related to itself, and parent relations can't form
 a cycle. Deleting a task removes its relations; a relation type in use can't be deleted.
 

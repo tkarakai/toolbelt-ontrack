@@ -717,9 +717,9 @@ test("removing a relation, a label or a relation type offers Undo", async () => 
 	await event("save", { dialog: "relate" });
 	const relations = () => saved.at(-1)!.tasks.find((t) => t.id === 1)!.relations ?? [];
 	expect(relations()).toHaveLength(1);
-	await event("unrelate", { rowId: "1", target: "1:blocks:3" });
+	await event("field", { form: "task", field: "related", value: [], rowId: "1" });
 	expect(relations()).toHaveLength(0);
-	expect(toasts().at(-1)).toMatchObject({ text: "Removed the relation between #1 and #3", action: { id: "undo" } });
+	expect(toasts().at(-1)).toMatchObject({ text: "Changed the relations of #1", action: { id: "undo" } });
 	await event("undo", undoPayload(), "toast");
 	expect(relations()).toHaveLength(1);
 
@@ -799,6 +799,40 @@ test("the drawer's Related field adds and removes relations like labels, with Un
 	expect(related().value).toEqual([{ key: "parent", value: "#1 Write spec" }, { key: "relatedTo", value: "#3 Fix login bug" }]);
 	// R goes to the Related field in the drawer.
 	expect(table().actions.find((a: any) => a.id === "relate").focus).toBe("related");
+});
+
+test("the drawer lists Parent, Children, Blocked by and Blocks, and following one selects that task", async () => {
+	const d = family();
+	d.tasks.find((t) => t.id === 3)!.relations.push({ task: 2, type: "blocks" });
+	d.tasks.find((t) => t.id === 3)!.labels[3] = "High";
+	const { event } = await start(d);
+	const cards = (rowId: string) => rows().find((r) => r.id === rowId).pane.filter((n: any) => String(n.id).startsWith("rel-"));
+	expect(cards("1").map((c: any) => c.title)).toEqual(["Children · 0/2 settled"]);
+	const kids = cards("1")[0].children[0];
+	expect(kids).toMatchObject({ type: "list", open: { id: "open-task" } });
+	expect(kids.items.map((i: any) => i.id)).toEqual(["rel:2", "rel:3"]);
+	expect(kids.items[1]).toMatchObject({ title: "Fix login bug", prefix: { text: "#3" }, icon: STATE_ICONS.working, tags: [{ text: "Working on" }, { text: "High" }] });
+	expect(cards("3").map((c: any) => c.title)).toEqual(["Parent · 1", "Blocks · 1"]);
+	expect(cards("2").map((c: any) => c.title)).toEqual(["Parent · 1", "Blocked by · 1"]);
+	// Clicking one goes to that task; so does a Related pill.
+	await event("open-task", { list: "rel-parent", item: "rel:1", rowId: "2" });
+	expect(host!.messages.filter((m: any) => m.type === "navigate").at(-1)).toMatchObject({ screen: "tasks", select: "1" });
+	expect(paneNode("2", "task").fields.find((f: any) => f.id === "related").open).toMatchObject({ id: "open-related" });
+	await event("open-related", { form: "task", field: "related", key: "blocks", value: "#2 Reply to Anna", rowId: "3" });
+	expect(host!.messages.filter((m: any) => m.type === "navigate").at(-1)).toMatchObject({ screen: "tasks", select: "2" });
+	// Hidden by the search: it says so.
+	await event("search", { query: "login" });
+	await event("open-task", { list: "rel-blocks", item: "rel:2", rowId: "3" });
+	expect(toasts().at(-1)).toMatchObject({ text: "#2 is hidden by the search or filters.", tone: "error" });
+});
+
+test("Parent and Blocks show they're built in and offer no Delete", async () => {
+	await start(fixture());
+	const relRows = tree("screen:labels").children[1].children[0].rows;
+	const parent = relRows.find((r: any) => r.id === "rparent");
+	expect(parent.actions).toEqual(["edit-relation-type"]);
+	expect(parent.cells.name.sub).toBe("Makes subtasks");
+	expect(relRows.find((r: any) => r.id === "rrelatedTo").actions).toBeUndefined();
 });
 
 test("a new task can start in any state and with relations", async () => {
