@@ -1,9 +1,9 @@
 // Builds OnTrack's surfaces from the data and the plugin's view state. Pure: given the same
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
-import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, sectionOf, snoozeChoices, STATES, timeSpent, TRANSITIONS, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { DUE, DUE_BUCKETS, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
-import { BUILT_IN_RELATIONS, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, remindsAt, sectionOf, snoozeChoices, span, stallsAt, stallWarning, STATES, timeSpent, TRANSITIONS, untouched, WEEKLY, workingSince, type SectionId } from "./lifecycle";
+import { DUE, DUE_BUCKETS, PROGRESSING_STATES, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
+import { BUILT_IN_RELATIONS, MAX_STALL_MINUTES, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; start?: NewTaskStart; error?: string }
@@ -12,7 +12,7 @@ export type Dialog =
 	| WatchDialog
 	| { kind: "label"; id?: number; draft: LabelDraft; error?: string }
 	| { kind: "relationType"; id?: string; name: string; inverse: string; error?: string }
-	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; error?: string };
+	| { kind: "updates"; id: number; draft: string; editing?: UpdateDraft; resume?: boolean; error?: string };
 
 /**
  * What a new task starts with besides its fields: its workflow state and relations, as the
@@ -269,7 +269,8 @@ function matches(data: Data, task: Task, s: ReturnType<typeof search>) {
 /**
  * Every task action; each row offers the ones that fit its state (`actionsFor`). The state
  * machine: P starts work from the Inbox and brings a task back to the Inbox from anywhere else;
- * Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there. A archives,
+ * Z, W and S put it in Snoozed, Watching or Settled, or change it when it's there; ⇧P marks a
+ * task you're working on stalled, and the next step (an update) brings it back. A archives,
  * E edits, R relates, U marks read.
  */
 export function taskActions(now: number): Action[] {
@@ -279,6 +280,10 @@ export function taskActions(now: number): Action[] {
 		{ id: "wake", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "unwatch", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
 		{ id: "reopen", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		{ id: "unstall", label: "Back to Inbox", icon: "inbox", key: "p", inline: true, group: "flow" },
+		// A stalled task goes back to Working on through an update: this lands in the drawer's box.
+		{ id: "resume", label: "Write the next step", icon: "footprints", inline: true, group: "flow", focus: "update" },
+		{ id: "stall", label: "Mark stalled", icon: "hourglass", key: "shift+p", group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
 		{
 			id: "snooze",
@@ -306,19 +311,25 @@ export function taskActions(now: number): Action[] {
 	];
 }
 
-/** The action ids a task offers, from its state. */
 /** The action that moves a task into each state (into the Inbox, by where it comes from). */
-const MOVE: Record<Exclude<Task["state"], "inbox">, string> = { working: "work", snoozed: "snooze", watching: "watch", settled: "settle" };
-const BACK: Record<Exclude<Task["state"], "inbox">, string> = { working: "done", snoozed: "wake", watching: "unwatch", settled: "reopen" };
+const MOVE: Record<Exclude<Task["state"], "inbox">, string> = { working: "work", stalled: "stall", snoozed: "snooze", watching: "watch", settled: "settle" };
+const BACK: Record<Exclude<Task["state"], "inbox">, string> = { working: "done", stalled: "unstall", snoozed: "wake", watching: "unwatch", settled: "reopen" };
 
-/** The action id that makes `task` move to `to` (which `TRANSITIONS` must allow). */
-export const actionFor = (task: Task, to: Task["state"]) => (to === "inbox" ? BACK[task.state as Exclude<Task["state"], "inbox">] : MOVE[to]);
+/**
+ * The action id that makes `task` move to `to` (which `TRANSITIONS` must allow). Back to Working
+ * on from Stalled is writing the next step.
+ */
+export const actionFor = (task: Task, to: Task["state"]) =>
+	to === "inbox" ? BACK[task.state as Exclude<Task["state"], "inbox">] : to === "working" && task.state === "stalled" ? "resume" : MOVE[to];
 
-/** The action ids a task offers: its moves from `TRANSITIONS` (P, Z, W, S), then the rest. */
-export function actionsFor(task: Task): string[] {
+/**
+ * The action ids a task offers: its moves from `TRANSITIONS` (P, ⇧P, Z, W, S), then the rest.
+ * Without stalling (`stallOn` false), a task can't be marked stalled.
+ */
+export function actionsFor(task: Task, stallOn = true): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
-	const ids = TRANSITIONS[task.state].map((to) => actionFor(task, to));
+	const ids = TRANSITIONS[task.state].filter((to) => to !== "stalled" || stallOn).map((to) => actionFor(task, to));
 	ids.push("edit", "add-update", "relate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
 	if (section === "inbox" || section === "working") ids.push("up", "down");
@@ -337,6 +348,7 @@ export const STATE_ICONS = {
 	inbox: asset("state-inbox"),
 	progressing: asset("state-progressing"),
 	working: asset("state-working"),
+	stalled: asset("state-stalled"),
 	snoozed: asset("state-snoozed"),
 	watching: asset("state-watching"),
 	settled: asset("state-settled"),
@@ -344,7 +356,7 @@ export const STATE_ICONS = {
 
 /**
  * How each group looks and takes drops. Status groups are the states' sections, as before:
- * Progressing holds Working on, Snoozed and Watching (a drop on it starts work), Settled starts
+ * Progressing holds Working on, Stalled, Snoozed and Watching (a drop on it starts work), Settled starts
  * collapsed, and Archived, the last, starts collapsed and dimmed. A drop into a label's group sets
  * that value (into its No group clears it); into Today or No date sets or clears the due date.
  */
@@ -354,6 +366,7 @@ export const LOOKS: Looks = {
 			inbox: { label: "Inbox", icon: STATE_ICONS.inbox, empty: "Inbox zero", dropLabel: "Move to Inbox", dropIcon: STATE_ICONS.inbox },
 			progressing: { label: "Progressing", icon: STATE_ICONS.progressing, dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
 			working: { label: "Working on", icon: STATE_ICONS.working, empty: "Nothing you're working on", dropLabel: "Start working on it", dropIcon: STATE_ICONS.working },
+			stalled: { label: "Stalled", icon: STATE_ICONS.stalled, empty: "Nothing stalled", order: "fixed", dropLabel: "Mark stalled", dropIcon: STATE_ICONS.stalled },
 			snoozed: { label: "Snoozed", icon: STATE_ICONS.snoozed, empty: "Nothing snoozed", order: "fixed", dropLabel: "Snooze…", dropIcon: STATE_ICONS.snoozed },
 			watching: { label: "Watching", icon: STATE_ICONS.watching, empty: "Nothing to watch", order: "fixed", dropLabel: "Watch…", dropIcon: STATE_ICONS.watching },
 			settled: { label: "Settled", icon: STATE_ICONS.settled, empty: "Nothing settled yet", collapsed: true, order: "fixed", dropLabel: "Settle", dropIcon: STATE_ICONS.settled },
@@ -377,7 +390,7 @@ return { label: name, ...(pill && { pill }), order: "fixed", dropLabel: none ? `
 };
 
 /** Every task in table order: each state's in its own order, then archived ones, newest first. */
-const HOME_ORDER: SectionId[] = ["inbox", "working", "snoozed", "watching", "settled"];
+const HOME_ORDER: SectionId[] = ["inbox", "working", "stalled", "snoozed", "watching", "settled"];
 export const tableOrder = (data: Data) => [...HOME_ORDER.flatMap((id) => inSection(data, id)), ...data.tasks.filter((t) => t.archived).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0) || b.id - a.id)];
 
 function dueCell(task: Task, now: number): Cell {
@@ -398,8 +411,19 @@ export function watchLine(w: Watch, now: number) {
 		.join(" · ");
 }
 
-/** The moment that matters for the task's section. */
-function whenCell(task: Task): Cell {
+/** "Untouched 6 days · stalled 3×": a stalled task's second line. */
+export function stallLine(data: Data, task: Task, now: number) {
+	const n = task.stalls ?? 0;
+	return [`Untouched ${span(untouched(data, task, now))}`, n > 1 ? `stalled ${n}×` : undefined].filter(Boolean).join(" · ");
+}
+
+/**
+ * The moment that matters for the task's section. A task you're working on, untouched long
+ * enough to warn about, says for how long instead, in amber.
+ */
+function whenCell(data: Data, task: Task, now: number): Cell {
+	if (stallWarning(data, task, now)) return { text: `Untouched ${span(untouched(data, task, now))}`, tone: "warning", icon: STATE_ICONS.stalled };
+	if (task.state === "stalled" && task.stalledAt) return { text: "", at: task.stalledAt, icon: STATE_ICONS.stalled, tone: "warning" };
 	if (task.state === "watching") return task.watch?.next !== undefined ? { text: "", at: task.watch.next, icon: STATE_ICONS.watching } : { text: "No reminder", icon: STATE_ICONS.watching, tone: "muted" };
 	if (task.state === "snoozed" && task.snoozedUntil) return { text: "", at: task.snoozedUntil, icon: STATE_ICONS.snoozed };
 	if (task.state === "settled" && task.settledAt) return { text: "", at: task.settledAt, icon: STATE_ICONS.settled };
@@ -419,7 +443,14 @@ function taskRow(data: Data, task: Task, now: number, group?: string, tree?: Row
 		...(task.archived && says.get(STATUS) !== "archived" && !pills.some((p) => p.icon === "archive") ? [{ icon: "archive", tooltip: "Archived" }] : []),
 		...(task.watch && task.state !== "watching" ? [{ icon: STATE_ICONS.watching, tooltip: task.watch.on ? `Watching: waiting on ${task.watch.on}` : "Watching" }] : []),
 	];
-	const sub = task.unread && task.unreadReason ? task.unreadReason : task.state === "watching" && task.watch ? watchLine(task.watch, now) : snippet(task.desc);
+	const sub =
+		task.unread && task.unreadReason
+			? task.unreadReason
+			: task.state === "watching" && task.watch
+				? watchLine(task.watch, now)
+				: task.state === "stalled" && !task.archived
+					? stallLine(data, task, now)
+					: snippet(task.desc);
 	return {
 		id: String(task.id),
 		group,
@@ -442,10 +473,10 @@ function taskRow(data: Data, task: Task, now: number, group?: string, tree?: Row
 				marks: marks.length ? marks : undefined,
 			},
 			due: dueCell(task, now),
-			when: whenCell(task),
+			when: whenCell(data, task, now),
 		},
 		pane: taskPane(data, task, now),
-		actions: [...actionsFor(task), ...(tree?.under ? ["indent"] : []), ...(tree && parentOf(data, task.id) !== undefined ? ["outdent"] : [])],
+		actions: [...actionsFor(task, data.stall.on), ...(tree?.under ? ["indent"] : []), ...(tree && parentOf(data, task.id) !== undefined ? ["outdent"] : [])],
 		// Relations are removed from the Related field (its pills' ×).
 		...(tree?.under && { targets: { indent: [{ id: String(tree.under.id), label: `Under ${taskName(data, tree.under.id)}`, icon: "indent-increase" }] } }),
 		...(tree?.children.length && { children: tree.children, open: true }),
@@ -505,15 +536,19 @@ const NEW_STATES: { value: Task["state"]; label: string }[] = [
 	{ value: "settled", label: "Settled" },
 ];
 
-/** The status picker's choices: where the task is now (with its moment), and where it can go. */
-function statusOptions(task: Task, now: number) {
+/**
+ * The status picker's choices: where the task is now (with its moment), and where it can go.
+ * Stalled is offered while stalling is on; from Stalled, Working on asks for the next step.
+ */
+function statusOptions(data: Data, task: Task, now: number) {
 	const since = workingSince(task);
 	const at = (ms: number) => stamp(ms, now);
 	// Only the states `TRANSITIONS` allows from here, in list order, and the current one.
-	const reachable = (value: string) => value === task.state || TRANSITIONS[task.state].includes(value as Task["state"]);
+	const reachable = (value: string) => value === task.state || (TRANSITIONS[task.state].includes(value as Task["state"]) && (value !== "stalled" || data.stall.on));
 	return ([
 		{ value: "inbox", label: "Inbox" },
-		{ value: "working", label: task.state === "working" && since ? `Working on · since ${at(since)}` : "Working on" },
+		{ value: "working", label: task.state === "working" && since ? `Working on · since ${at(since)}` : task.state === "stalled" ? "Working on · write the next step…" : "Working on" },
+		{ value: "stalled", label: task.state === "stalled" && task.stalledAt ? `Stalled since ${at(task.stalledAt)}` : "Stalled" },
 		{ value: "snoozed", label: task.state === "snoozed" && task.snoozedUntil ? `Snoozed until ${at(task.snoozedUntil)}` : "Snooze…" },
 		{
 			value: "watching",
@@ -521,6 +556,48 @@ function statusOptions(task: Task, now: number) {
 		},
 		{ value: "settled", label: task.state === "settled" && task.settledAt ? `Settled ${at(task.settledAt)}` : "Settled" },
 	] satisfies { value: (typeof STATES)[number]; label: string }[]).filter((o) => reachable(o.value));
+}
+
+/**
+ * Where a task stands on stalling, as a section of the drawer (drawn like Parent or Updates): a
+ * stalled task's says how long it's been untouched (in amber), since when it's stalled, how many
+ * times and the next reminder, then what gets it moving; a task you're working on that's turned
+ * amber says when it will stall. The other ways out are the drawer's buttons.
+ */
+function stallCard(data: Data, task: Task, now: number): Node | undefined {
+	if (task.archived) return undefined;
+	const at = (ms: number) => stamp(ms, now);
+	const idle = { label: "Untouched", value: span(untouched(data, task, now)), tone: "warning" as const };
+	const hint = (text: string): Node => ({ type: "text", text, tone: "muted" });
+	if (task.state === "stalled") {
+		const n = task.stalls ?? 1;
+		const reminder = remindsAt(data, task);
+		return {
+			type: "card",
+			id: "stall",
+			title: "Stalled",
+			children: [
+				{
+					type: "details",
+					items: [
+						idle,
+						...(task.stalledAt ? [{ label: "Since", value: at(task.stalledAt) }] : []),
+						{ label: "Times stalled", value: n === 1 ? "First time" : `${n}` },
+						{ label: "Next reminder", value: reminder ? at(reminder) : "Off" },
+					],
+				},
+				hint("Write the next step (↵) to get back to it."),
+			],
+		};
+	}
+	const stalls = stallsAt(data, task);
+	if (stalls === undefined || !stallWarning(data, task, now)) return undefined;
+	return {
+		type: "card",
+		id: "stall",
+		title: "Stalls soon",
+		children: [{ type: "details", items: [idle, { label: "Stalls", value: at(stalls) }] }, hint("Add an update or edit it to keep it in Working on.")],
+	};
 }
 
 /** A watched task's schedule, in full: who, since when, how often, next and last check. */
@@ -612,14 +689,15 @@ const madeLine = (task: Task, now: number) => [`Created ${stamp(task.created, no
 export function taskPane(data: Data, task: Task, now: number): Node[] {
 	const updates = updatesOf(task);
 	return [
-		...(task.unread && task.unreadReason ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
+		// A stalled task's card says it all; others say what's new.
+		...(task.unread && task.unreadReason && task.state !== "stalled" ? [{ type: "text" as const, text: `New · ${task.unreadReason}`, tone: "info" as const }] : []),
 		{
 			type: "form",
 			id: "task",
 			appearance: "inline",
 			fields: [
 				{ type: "text", id: "name", label: "Name", value: task.name, heading: true, note: `#${task.id}`, placeholder: "What needs doing" },
-				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Workflow", value: task.state, options: statusOptions(task, now) }]),
+				...(task.archived ? [] : [{ type: "select" as const, id: "state", label: "Workflow", value: task.state, options: statusOptions(data, task, now) }]),
 				{ type: "datetime", id: "due", label: isOverdue(task, now) ? "Overdue" : "Due", value: task.due ?? "", placeholder: "No due date" },
 				{ type: "tags", id: "labels", label: "Labels", value: toTagValues(task.labels), keys: tagKeys(data) },
 				// Relations are added like labels: + Add, the relation, then the task.
@@ -628,6 +706,8 @@ export function taskPane(data: Data, task: Task, now: number): Node[] {
 			],
 		},
 		...(task.watch && task.state !== "settled" ? [{ type: "text" as const, text: watchFacts(task, now), tone: "muted" as const }] : []),
+		// Stalled, or about to: a section of its own, before the relations.
+		...(stallCard(data, task, now) ? [stallCard(data, task, now)!] : []),
 		// The built-in relations, each a list of its tasks, as rich as their rows; a click goes there.
 ...familyCards(data, task, now),
 ...(factsLine(task, now) ? [{ type: "text" as const, text: factsLine(task, now)!, tone: "muted" as const }] : []),
@@ -669,7 +749,8 @@ function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Fi
 	const values = filterValues(data, f.id);
 	const grouping = { group: f.group, ...(!f.group && groupedLevels(data.filters) + levelsOf(f.id) > MAX_LEVELS && { groupDisabled: DEPTH_LIMIT }) };
 	if (f.id === STATUS)
-		return { id: f.id, label: "Workflow", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0 })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
+		// Its menu follows the list: the Inbox, Progressing's states under their heading, then Settled and Archived.
+		return { id: f.id, label: "Workflow", icon: "list-checks", options: values.map((v) => ({ value: v, label: STATUS_LABELS[v as StatusValue], count: counts.get(v) ?? 0, ...(PROGRESSING_STATES.includes(v as StatusValue) && { section: "Progressing" }) })), selected: f.selected, default: { values: [...ONGOING], label: "Ongoing" }, ...grouping };
 	if (f.id === DUE)
 		return { id: f.id, label: "Due", icon: "calendar", options: values.map((v) => ({ value: v, label: DUE_BUCKETS.find((b) => b.id === v)!.label, count: counts.get(v) ?? 0 })), selected: f.selected, ...grouping };
 	const label = data.labels.find((l) => `label:${l.id}` === f.id)!;
@@ -745,7 +826,53 @@ paneButtons: true,
 
 // ── settings screen ─────────────────────────────────────────────────────
 
-/** Labels and relation types, each table with its own New button above it. */
+const DAY = 1440;
+/** Quick picks for the stalling durations, in minutes; each field offers those that fit it. */
+const STALL_PRESETS = [30, 60, 4 * 60, DAY, 2 * DAY, 3 * DAY, 7 * DAY];
+
+/**
+ * Settings' Stalling section, one form (Toolbelt draws it as its own card): whether tasks stall,
+ * after how long, when rows turn amber (always sooner, so its longest choice is just under the
+ * stall), how often a stalled task reminds you, and whether weekends count. Durations are edited
+ * as days, hours and minutes; each change saves on its own (`setStall`).
+ */
+export function stallForm(data: Data): Node {
+	const s = data.stall;
+	const fits = (max: number) => STALL_PRESETS.filter((m) => m <= max).map((value) => ({ value }));
+	const fields: Field[] = [
+		{ type: "switch", id: "on", label: "Stall tasks left untouched", value: s.on, description: "A task in Working on with no update or edit for a while moves to Stalled, unread. Writing its next step brings it back." },
+		...(s.on
+			? ([
+					{ type: "duration", id: "after", label: "Stall after", value: s.after, min: 2, max: MAX_STALL_MINUTES, presets: fits(MAX_STALL_MINUTES) },
+					{
+						type: "duration",
+						id: "warnAfter",
+						label: "Turn amber after",
+						value: s.warnAfter,
+						min: 1,
+						max: s.after - 1,
+						presets: fits(s.after - 1),
+						description: "Its row says how long it's been untouched, in amber, before it stalls.",
+					},
+					{
+						type: "duration",
+						id: "remindEvery",
+						label: "Remind me every",
+						value: s.remindEvery,
+						min: 1,
+						max: MAX_STALL_MINUTES,
+						none: "Never",
+						presets: [{ value: null }, ...fits(MAX_STALL_MINUTES)],
+						description: "While a task stays stalled, it's marked unread again.",
+					},
+					{ type: "switch", id: "weekends", label: "Count weekends", value: s.weekends, description: "Off: time on Saturdays and Sundays doesn't count." },
+				] satisfies Field[])
+			: []),
+	];
+	return { type: "form", id: "stall", title: "Stalling", description: "Tasks you chose to work on but stopped touching.", fields };
+}
+
+/** Labels and relation types, each table with its own New button above it; then Stalling. */
 export function settingsScreen(data: Data, view: View, now: number): Node {
 	const uses = (label: Label) => data.tasks.filter((t) => t.labels[label.id] !== undefined).length;
 	return {
@@ -820,6 +947,7 @@ export function settingsScreen(data: Data, view: View, now: number): Node {
 					},
 				],
 			},
+			stallForm(data),
 		],
 		dialog: view.dialog && ["label", "relationType"].includes(view.dialog.kind) ? dialogNode(data, view.dialog, now) : undefined,
 	};
@@ -1045,6 +1173,8 @@ function updatesDialog(data: Data, dialog: Extract<Dialog, { kind: "updates" }>)
 	const task = data.tasks.find((t) => t.id === dialog.id);
 	const list = task ? updatesOf(task) : [];
 	const e = dialog.editing;
+	// On a stalled task, the next update is its next step, and saving it brings the task back.
+	const resume = !e && !!dialog.resume;
 	const form: Node = e
 		? {
 				type: "form",
@@ -1067,14 +1197,18 @@ function updatesDialog(data: Data, dialog: Extract<Dialog, { kind: "updates" }>)
 						markdown: true,
 						rows: 4,
 						autofocus: true,
-						placeholder: "What changed? Markdown works: **bold**, - lists, [links](https://…)",
+						placeholder: resume ? "Next: …" : "What changed? Markdown works: **bold**, - lists, [links](https://…)",
 					},
 				],
 			};
 	return {
 		id: "updates",
-		title: e ? `Edit update · ${taskName(data, dialog.id)}` : `Updates · ${taskName(data, dialog.id)}`,
-		description: e ? undefined : "Newest first. ⌘↵ adds it. Tab to the list, then E edits and ⌫ deletes.",
+		title: e ? `Edit update · ${taskName(data, dialog.id)}` : resume ? `Next step · ${taskName(data, dialog.id)}` : `Updates · ${taskName(data, dialog.id)}`,
+		description: e
+			? undefined
+			: resume
+				? "What's the smallest next step? Saving it moves the task back to Working on."
+				: "Newest first. ⌘↵ adds it. Tab to the list, then E edits and ⌫ deletes.",
 		wide: true,
 		resizable: true,
 		actions: e
@@ -1082,7 +1216,7 @@ function updatesDialog(data: Data, dialog: Extract<Dialog, { kind: "updates" }>)
 					{ id: "update-back", label: e.closeAfter ? "Discard" : "Back to updates", icon: "arrow-left" },
 					{ id: "save", label: "Save update", primary: true },
 				]
-			: [{ id: "save", label: "Add update", primary: true, icon: "message-square-plus" }],
+			: [{ id: "save", label: resume ? "Back to work" : "Add update", primary: true, icon: resume ? "play" : "message-square-plus" }],
 		children: [
 			...error(dialog.error),
 			form,
@@ -1110,8 +1244,9 @@ const latestUpdate = (t: Task) => {
 };
 
 /**
- * The menu-bar quick view: a line to jot a new task into the Inbox (N), then the Inbox and what
- * you're working on, in the table's order. Every task carries one icon, its state's (the table's
+ * The menu-bar quick view: a line to jot a new task into the Inbox (N), then the Inbox, what
+ * you're working on and what stalled, in the table's order. A stalled task's update (U) is its
+ * next step, which brings it back to Working on. Every task carries one icon, its state's (the table's
  * section or group icon). Each task can be started, stopped, settled, snoozed or given an update
  * (U) without opening the window; ↵ opens it there. Unread tasks are bold; overdue ones get a red dot
  * and a red title.
@@ -1119,6 +1254,7 @@ const latestUpdate = (t: Task) => {
 export function quickView(data: Data, now: number): Node {
 	const waiting = inSection(data, "inbox");
 	const working = inSection(data, "working");
+	const stalled = inSection(data, "stalled");
 	const later = {
 		update: { id: "add-update", label: "Add update", icon: "message-square-plus", key: "u", input: { placeholder: "What changed? ↵ adds it" } },
 		snooze: { id: "snooze", label: "Snooze…", icon: "alarm-clock", key: "z" },
@@ -1126,6 +1262,23 @@ export function quickView(data: Data, now: number): Node {
 		settle: { id: "settle", label: "Settle", icon: "check", key: "s" },
 	};
 	const item = (t: Task) => {
+		if (t.state === "stalled")
+			return {
+				id: String(t.id),
+				title: t.name,
+				subtitle: (t.unread && t.unreadReason) || `Stalled · ${stallLine(data, t, now).toLowerCase()}`,
+				icon: STATE_ICONS.stalled,
+				dot: overdueDot(t, now),
+				titleStyle: isOverdue(t, now) ? { color: "danger" as const } : undefined,
+				...(t.due ? { metaAt: dueAt(t.due) } : {}),
+				unread: t.unread || undefined,
+				actions: [
+					{ ...later.update, label: "Write the next step", input: { placeholder: "Next step… ↵ moves it back to Working on" } },
+					{ id: "unstall", label: "Back to Inbox", icon: "inbox", key: "p" },
+					later.snooze,
+					later.settle,
+				],
+			};
 		const since = workingSince(t);
 		const labels = tags(data, t).map((tag) => tag.text).join(" · ");
 		const note = latestUpdate(t);
@@ -1152,7 +1305,7 @@ export function quickView(data: Data, now: number): Node {
 			{
 				type: "list",
 				id: "focus",
-				items: [...waiting, ...working].slice(0, 15).map(item),
+				items: [...waiting, ...working, ...stalled].slice(0, 15).map(item),
 				empty: { title: "Inbox zero", description: "Nothing waiting for you.", icon: STATE_ICONS.inbox },
 			},
 		],

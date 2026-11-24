@@ -25,7 +25,7 @@ function fixture(): Data {
 
 test("a fresh row groups by Status showing Ongoing; Due and each label follow", () => {
 	expect(seed().filters).toEqual([
-		{ id: "status", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"] },
+		{ id: "status", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"] },
 		{ id: "due", group: false, selected: [] },
 		{ id: "label:1", group: false, selected: [] },
 		{ id: "label:2", group: false, selected: [] },
@@ -87,8 +87,12 @@ test("Status at the top shows each selected state even when empty, Archived last
 	data.filters[0]!.selected = [];
 	const { sections } = d.groupTasks(data, tableOrder(data), NOW, LOOKS);
 	expect(sections.map((s) => s.id)).toEqual(["inbox", "progressing", "settled", "archived"]);
-	expect(sections[1]!.sections!.map((s) => s.id)).toEqual(["working", "snoozed", "watching"]);
+	expect(sections[1]!.sections!.map((s) => s.id)).toEqual(["working", "stalled", "snoozed", "watching"]);
 	expect(sections.at(-1)).toMatchObject({ label: "Archived", collapsed: true, muted: true });
+	// Without stalling, an empty Stalled stays out of the way.
+	data.stall.on = false;
+	expect(d.groupTasks(data, tableOrder(data), NOW, LOOKS).sections[1]!.sections!.map((s) => s.id)).toEqual(["working", "snoozed", "watching"]);
+	data.stall.on = true;
 	// Only Inbox and Watching: Progressing holds just Watching.
 	data.filters[0]!.selected = ["inbox", "watching"];
 	const narrowed = d.groupTasks(data, tableOrder(data), NOW, LOOKS).sections;

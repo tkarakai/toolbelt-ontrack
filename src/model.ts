@@ -3,7 +3,7 @@
 import { HUES, leastUsedHue, type Hue } from "@toolbelt/sdk";
 import { defaultFilters, normalizeFilters, type FilterSetting } from "./display";
 
-export const SCHEMA = 7;
+export const SCHEMA = 8;
 
 export type LabelType = "string" | "bool";
 
@@ -50,10 +50,33 @@ export type Relation = { task: number; type: string };
 
 /**
  * Where a task is in its life, as in T3 Code's thread list: waiting in the Inbox, being worked on,
- * snoozed until a time, watched (out of your hands for now, checked on from time to time) or
- * settled (done). Archiving is a separate flag on top.
+ * stalled (still yours and chosen, but untouched for a while), snoozed until a time, watched (out
+ * of your hands for now, checked on from time to time) or settled (done). Archiving is a separate
+ * flag on top.
  */
-export type TaskState = "inbox" | "working" | "snoozed" | "watching" | "settled";
+export type TaskState = "inbox" | "working" | "stalled" | "snoozed" | "watching" | "settled";
+
+/**
+ * When a task you're working on stalls, in minutes of time that counts: all of it, or without
+ * Saturdays and Sundays when `weekends` is off.
+ */
+export type StallSettings = {
+	/** Tasks stall on their own, Working on rows warn, and stalled tasks remind. */
+	on: boolean;
+	/** Minutes without an update or edit before a task in Working on stalls (2 to 30 days). */
+	after: number;
+	/** Minutes without one before its row turns amber (1 to `after` − 1). */
+	warnAfter: number;
+	/** Minutes between reminders while it stays stalled (marked unread again); null: never. */
+	remindEvery: number | null;
+	/** Saturdays and Sundays count. */
+	weekends: boolean;
+};
+
+const DAY = 1440;
+/** The longest stall threshold or reminder interval, in minutes: 30 days. */
+export const MAX_STALL_MINUTES = 30 * DAY;
+export const DEFAULT_STALL: StallSettings = { on: true, after: 3 * DAY, warnAfter: 2 * DAY, remindEvery: DAY, weekends: true };
 
 export type CadenceUnit = "day" | "week" | "month";
 export const CADENCE_UNITS: readonly CadenceUnit[] = ["day", "week", "month"];
@@ -119,6 +142,18 @@ export type Task = {
 	watch?: Watch;
 	/** Epoch ms it was settled (state `settled`). */
 	settledAt?: number;
+	/**
+	 * Epoch ms of the last real work on it: starting work, an update written or edited, its name,
+	 * description or due date changed, a subtask added or settled. What stalls a task and what
+	 * brings a stalled one back. Labels, relations, order and reading don't count.
+	 */
+	touched?: number;
+	/** Epoch ms it stalled (state `stalled`). */
+	stalledAt?: number;
+	/** Epoch ms it was last marked unread as stalled (state `stalled`); reminders count from it. */
+	remindedAt?: number;
+	/** How many times it has stalled, kept after it moves on. */
+	stalls?: number;
 	/** The `due` value whose arrival was already announced, so it's announced once. */
 	dueAnnounced?: string;
 	sessions: Session[];
@@ -142,6 +177,8 @@ export type Data = {
 	filters: FilterSetting[];
 	/** How subtasks show: not nested, nested in their own groups, or following their parent. */
 	subtasks: SubtaskMode;
+	/** When tasks you're working on stall. */
+	stall: StallSettings;
 };
 
 /**
@@ -198,6 +235,7 @@ export function seed(): Data {
 		tasks: [],
 		filters: defaultFilters({ labels }),
 		subtasks: "off",
+		stall: { ...DEFAULT_STALL },
 		labels,
 		relationTypes: [
 			{ id: "parent", name: "Parent", inverse: "Child" },
@@ -408,6 +446,8 @@ export function updateTask(data: Data, id: number, input: TaskInput, now: number
 	const task = findTask(data, id);
 	const next = checkTask(data, input);
 	rememberValues(data, next.labels, random);
+	// Real work on it, unlike a label change: it keeps the task from stalling.
+	if (next.name !== task.name || next.desc !== task.desc || next.due !== task.due) task.touched = now;
 	Object.assign(task, next, { updated: now });
 	if (next.due === undefined) delete task.due;
 	// A new due date is announced again when it arrives.
@@ -443,7 +483,7 @@ export function addUpdate(data: Data, taskId: number, text: string, now: number)
 	const task = findTask(data, taskId);
 	const update: Update = { id: data.nextUpdateId++, added: now, updated: now, text: checkText(text) };
 	task.updates.push(update);
-	task.updated = now;
+	task.updated = task.touched = now;
 	return update;
 }
 
@@ -461,6 +501,7 @@ export function editUpdate(data: Data, taskId: number, id: number, input: { text
 	const updated = input.updated ?? (text !== update.text ? now : Math.max(update.updated, added));
 	if (added > now + SKEW || updated > now + SKEW) fail("An update can't be from the future.");
 	if (updated < added) fail("Last updated can't be before it was added.");
+	if (text !== update.text) task.touched = now;
 	Object.assign(update, { text, added, updated });
 	task.updated = now;
 	return update;
@@ -511,6 +552,8 @@ export function relate(data: Data, from: number, type: string, to: number, inver
 	if (type === "parent" && wouldCycle(data, holder.id, target.id)) fail("That would make a task its own ancestor.");
 	holder.relations.push({ task: target.id, type });
 	holder.updated = target.updated = now;
+	// A new subtask is work on its parent.
+	if (type === "parent") target.touched = now;
 }
 
 export function unrelate(data: Data, holder: number, type: string, target: number, now: number) {
@@ -546,6 +589,7 @@ export function setParent(data: Data, id: number, parent: number | null, now: nu
 	task.relations = task.relations.filter((r) => r.type !== "parent");
 	if (parent !== null) task.relations.push({ task: parent, type: "parent" });
 	task.updated = now;
+	if (parent !== null) findTask(data, parent).touched = now;
 	for (const other of [...had, parent]) {
 		const t = data.tasks.find((x) => x.id === other);
 		if (t) t.updated = now;
@@ -616,6 +660,50 @@ export function deleteRelationType(data: Data, id: string) {
 	data.relationTypes = data.relationTypes.filter((t) => t.id !== id);
 }
 
+// ── stalling ────────────────────────────────────────────────────────────
+
+const whole = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : Number.NaN);
+const minutesOk = (m: number, lo: number, hi: number) => Number.isInteger(m) && m >= lo && m <= hi;
+
+/**
+ * Changes stalling settings, one or several at a time, checking them together: a task stalls
+ * after 2 minutes to 30 days, turns amber earlier (at least a minute), and is reminded every
+ * minute to 30 days, or never (`remindEvery` null).
+ */
+export function setStall(data: Data, input: Partial<Record<keyof StallSettings, unknown>>): StallSettings {
+	const next = { ...data.stall };
+	for (const [key, raw] of Object.entries(input) as [keyof StallSettings, unknown][]) {
+		if (key === "on" || key === "weekends") next[key] = raw === true;
+		else if (key === "after" || key === "warnAfter") next[key] = whole(raw);
+		else if (key === "remindEvery") next.remindEvery = raw === null || raw === "" ? null : whole(raw);
+	}
+	if (!minutesOk(next.after, 2, MAX_STALL_MINUTES)) fail("A task stalls after 2 minutes to 30 days.");
+	if (!minutesOk(next.warnAfter, 1, MAX_STALL_MINUTES)) fail("Rows turn amber after at least a minute.");
+	if (next.warnAfter >= next.after) fail("Rows turn amber before tasks stall: make amber earlier first, then stall sooner.");
+	if (next.remindEvery !== null && !minutesOk(next.remindEvery, 1, MAX_STALL_MINUTES)) fail("Remind every minute to 30 days, or never.");
+	data.stall = next;
+	return next;
+}
+
+/**
+ * Stalling settings as stored: each one that's missing or out of range falls back to its
+ * default, and amber that wouldn't come before the stall moves to two thirds of it.
+ */
+function repairStall(value: unknown): StallSettings {
+	const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+	const d = DEFAULT_STALL;
+	const after = typeof v.after === "number" && minutesOk(v.after, 2, MAX_STALL_MINUTES) ? v.after : d.after;
+	const warn = typeof v.warnAfter === "number" && minutesOk(v.warnAfter, 1, after - 1) ? v.warnAfter : d.warnAfter < after ? d.warnAfter : Math.max(1, Math.floor((after * 2) / 3));
+	const remind = v.remindEvery === null ? null : typeof v.remindEvery === "number" && minutesOk(v.remindEvery, 1, MAX_STALL_MINUTES) ? v.remindEvery : d.remindEvery;
+	return { on: typeof v.on === "boolean" ? v.on : d.on, after, warnAfter: warn, remindEvery: remind, weekends: typeof v.weekends === "boolean" ? v.weekends : d.weekends };
+}
+
+/** The start of real work on a task as far as its history tells: its last session or update. */
+export function lastWork(task: Pick<Task, "sessions" | "updates">): number | undefined {
+	const times = [...task.sessions.map((s) => s.start), ...task.updates.flatMap((u) => [u.added, u.updated])];
+	return times.length ? Math.max(...times) : undefined;
+}
+
 // ── loading ─────────────────────────────────────────────────────────────
 
 /** Checks a parsed data file's shape, so a damaged file fails loudly instead of half-loading. */
@@ -629,8 +717,9 @@ export function parseData(value: unknown): Data {
 	if (!d.order || !Array.isArray(d.order.inbox) || !Array.isArray(d.order.working)) fail("The data file is damaged.");
 	if (d.labels.some((l) => !Array.isArray(l?.values) || l.values.some((v) => typeof v?.text !== "string" || !isHue(v.color)))) fail("The data file is damaged.");
 	if (!Array.isArray(d.filters) || !SUBTASK_MODES.includes(d.subtasks)) fail("The data file is damaged.");
-	// The filter row follows the labels (it's repaired, not refused).
+	// The filter row follows the labels (it's repaired, not refused), as do stalling settings.
 	d.filters = normalizeFilters(d);
+	d.stall = repairStall(d.stall);
 	// Built-in relation types deleted before they were locked come back, under their own names.
 	for (const t of BUILT_IN_RELATIONS) if (!d.relationTypes.some((x) => x.id === t.id)) d.relationTypes.push({ id: t.id, name: t.name, inverse: t.inverse });
 	return d;
@@ -723,7 +812,30 @@ export function upgrade5to6(old: any): Omit<Data, "schema" | "subtasks"> & { sch
 }
 
 /** Schema 6 → 7: how subtasks show is saved; it starts Off, as the list looked. */
-export function upgrade6to7(old: any): Data {
+export function upgrade6to7(old: any): Omit<Data, "schema" | "stall"> & { schema: 7 } {
 	if (!old || old.schema !== 6 || !Array.isArray(old.tasks)) fail("Expected schema 6 data.");
-	return { ...old, schema: SCHEMA, subtasks: SUBTASK_MODES.includes(old.subtasks) ? old.subtasks : "off" };
+	return { ...old, schema: 7, subtasks: SUBTASK_MODES.includes(old.subtasks) ? old.subtasks : "off" };
+}
+
+/**
+ * Schema 7 → 8: tasks you're working on can stall. Stalling starts on with its defaults; each
+ * task in Working on was last touched at its latest work session or update, so one untouched for
+ * long stalls at the next reminder time. A Workflow filter showing Working on shows Stalled too.
+ */
+export function upgrade7to8(old: any): Data {
+	if (!old || old.schema !== 7 || !Array.isArray(old.tasks)) fail("Expected schema 7 data.");
+	const tasks = old.tasks.map((t: Task) => {
+		if (t.state !== "working" || t.touched !== undefined) return t;
+		const at = lastWork(t);
+		return at === undefined ? t : { ...t, touched: at };
+	});
+	const filters = Array.isArray(old.filters)
+		? old.filters.map((f: FilterSetting) => {
+				if (f?.id !== "status" || !Array.isArray(f.selected) || !f.selected.includes("working") || f.selected.includes("stalled")) return f;
+				const selected = [...f.selected];
+				selected.splice(selected.indexOf("working") + 1, 0, "stalled");
+				return { ...f, selected };
+			})
+		: old.filters;
+	return { ...old, schema: SCHEMA, tasks, filters, stall: repairStall(old.stall) };
 }

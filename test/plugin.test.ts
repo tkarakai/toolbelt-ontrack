@@ -57,7 +57,7 @@ const paneNode = (rowId: string, id: string): any => {
 };
 /** A row's innermost group: its section, or the group inside Progressing (snoozed, watching). */
 const groupOf = (r: any) => (Array.isArray(r.group) ? r.group.at(-1).id : r.group);
-const bySection = () => Object.fromEntries(["inbox", "working", "snoozed", "watching", "settled"].map((id) => [id, rows().filter((r) => groupOf(r) === id).map((r) => r.cells.name.text)]));
+const bySection = () => Object.fromEntries(["inbox", "working", "stalled", "snoozed", "watching", "settled"].map((id) => [id, rows().filter((r) => groupOf(r) === id).map((r) => r.cells.name.text)]));
 const lastBadge = () => host!.messages.filter((m) => m.type === "badge").at(-1);
 const toasts = () => host!.messages.filter((m: any) => m.type === "toast") as any[];
 /** What the latest Undo toast's button sends. */
@@ -75,6 +75,7 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	// Progressing holds one declared sub-section per state; Snoozed and Watching keep their own order.
 	expect(table().sections[1].sections.map((s: any) => [s.id, s.label, s.order])).toEqual([
 		["working", "Working on", undefined],
+		["stalled", "Stalled", "fixed"],
 		["snoozed", "Snoozed", "fixed"],
 		["watching", "Watching", "fixed"],
 	]);
@@ -146,7 +147,7 @@ test("drag between sections performs the matching transition", async () => {
 	const { saved, event } = await start(fixture());
 	await event("reorder", { table: "tasks", rowId: "1", section: "working", before: null });
 	await event("reorder", { table: "tasks", rowId: "2", section: "settled", before: null });
-	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], watching: [], snoozed: [], settled: ["Reply to Anna"] });
+	expect(bySection()).toEqual({ inbox: ["Fix login bug"], working: ["Write spec"], stalled: [], watching: [], snoozed: [], settled: ["Reply to Anna"] });
 	// Progressing has no tasks of its own: rows join the Working on, Snoozed or Watching sub-section.
 	expect(rows().find((r) => r.id === "1").group).toBe("working");
 	expect(Object.keys(saved.at(-1)!.order)).toEqual(["inbox", "working"]);
@@ -240,9 +241,10 @@ test("Settings has a New button above each table, and labels can shade their val
 	const { saved, event } = await start();
 	const page = tree("screen:labels");
 	expect(page.actions).toBeUndefined();
-	expect(page.children.map((c: any) => [c.type, c.title, c.actions.map((a: any) => a.id), c.children[0].id])).toEqual([
+	expect(page.children.map((c: any) => [c.type, c.title, c.actions?.map((a: any) => a.id), c.children?.[0].id ?? c.id])).toEqual([
 		["card", "Labels", ["new-label"], "labels"],
 		["card", "Relation types", ["new-relation-type"], "relation-types"],
+		["form", "Stalling", undefined, "stall"],
 	]);
 	await event("new-label", undefined, "screen:labels");
 	const shades = () => labelField("shades");
@@ -756,8 +758,8 @@ test("filters and grouping are saved, and choosing them leaves a standing Undo",
 test("Workflow offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
 	await start(fixture());
 	const [status, due, project, personal] = tree("screen:tasks").filters;
-	expect(status).toMatchObject({ id: "status", label: "Workflow", group: true, selected: ["inbox", "working", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
-	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
+	expect(status).toMatchObject({ id: "status", label: "Workflow", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
+	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on", 0], ["Stalled", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
 	expect(due.options.map((o: any) => o.label)).toEqual(["Overdue", "Today", "Next 6 days", "Later", "Past", "No date"]);
 	expect(project.options.at(-1)).toMatchObject({ value: "__none", label: "No Project", count: 3 });
 	expect(personal.options.map((o: any) => o.label)).toEqual(["Yes", "No"]);
@@ -994,4 +996,81 @@ test("⌥→ goes under the task above, ⌥← moves out, a drop onto a task nes
 	await event("indent", { rowId: "2", target: "3" });
 	await event("reorder", { table: "tasks", rowId: "3", section: "inbox", before: null, onto: "2" });
 	expect(toasts().at(-1)).toMatchObject({ text: "That would make a task its own ancestor.", tone: "error" });
+});
+
+test("a task left untouched turns amber, stalls, and writing its next step brings it back", async () => {
+	const { saved, event } = await start(fixture());
+	const day = (n: number, hour = 12) => new Date(2026, 10, 14 + n, hour, 0).getTime();
+	const row = () => rows().find((r) => r.id === "2");
+	const card = () => row().pane.find((n: any) => n.id === "stall");
+	await event("work", { rowId: "2" });
+	expect(row().actions).toContain("stall");
+	// Day 2: still Working on, its When column says for how long, in amber; the drawer says when it stalls.
+	clock = day(2);
+	await event("search", { query: "" });
+	expect(row().cells.when).toMatchObject({ text: "Untouched 2 days", tone: "warning", icon: STATE_ICONS.stalled });
+	expect(card()).toMatchObject({ type: "card", title: "Stalls soon", children: [{ type: "details", items: [{ label: "Untouched", value: "2 days", tone: "warning" }, { label: "Stalls" }] }, { type: "text" }] });
+	// Three days after it was started, it stalls, unread.
+	clock = day(3);
+	await event("search", { query: "" });
+	// The badge comes before the new tree.
+	await until(() => row().unread === true);
+	expect(bySection().stalled).toEqual(["Reply to Anna"]);
+	expect(row()).toMatchObject({ unread: true, cells: { name: { sub: "Stalled · untouched 3 days" } } });
+	expect(row().actions.slice(0, 5)).toEqual(["resume", "unstall", "snooze", "watch", "settle"]);
+	expect(card()).toMatchObject({ title: "Stalled", children: [{ type: "details" }, { type: "text", text: "Write the next step (↵) to get back to it." }] });
+	expect(card().children[0].items.map((i: any) => [i.label, i.value])).toEqual([["Untouched", "3 days"], ["Since", expect.any(String)], ["Times stalled", "First time"], ["Next reminder", expect.any(String)]]);
+	// The card says it; no "New" line repeats it.
+	expect(row().pane.some((n: any) => n.type === "text" && n.text?.startsWith("New"))).toBe(false);
+	expect(lastBadge()).toEqual({ type: "badge", value: 1 });
+	expect(quickList().items.find((i: any) => i.id === "2")).toMatchObject({ icon: STATE_ICONS.stalled, subtitle: "Stalled · untouched 3 days" });
+	// Dragging it back to Working on asks for the next step; saving it moves the task back.
+	await event("reorder", { table: "tasks", rowId: "2", section: "working", before: null });
+	expect(tree("screen:tasks").dialog).toMatchObject({ id: "updates", title: "Next step · #2 Reply to Anna" });
+	expect(bySection().stalled).toEqual(["Reply to Anna"]);
+	clock = day(3, 13);
+	await event("field", { form: "update-new", field: "text-1", value: "Next: find her last email" });
+	await event("save", { dialog: "updates" });
+	expect(tree("screen:tasks").dialog).toBeUndefined();
+	expect(bySection().working).toEqual(["Reply to Anna"]);
+	expect(toasts().at(-1)).toMatchObject({ text: "#2 is back in Working on" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)).toMatchObject({ state: "working", stalls: 1, updates: [{ text: "Next: find her last email" }] });
+	// ⇧P stalls it by hand (read); from the quick view, its update is the next step.
+	await event("stall", { rowId: "2" });
+	expect(row().unread).toBeUndefined();
+	expect(row().cells.name.sub).toBe("Untouched less than a minute · stalled 2×");
+	clock = day(3, 14);
+	await event("add-update", { rowId: "2", text: "Next: reply", input: "Next: reply" }, "quick");
+	expect(bySection().working).toEqual(["Reply to Anna"]);
+});
+
+test("Settings' Stalling section changes when tasks stall, in minutes; amber always comes first; off hides Stalled", async () => {
+	const { saved, event } = await start(fixture());
+	const form = () => tree("screen:labels").children.find((c: any) => c.id === "stall");
+	const field = (id: string) => form().fields.find((f: any) => f.id === id);
+	// A form of its own (Toolbelt draws it as a card), not one boxed inside another card.
+	expect(form()).toMatchObject({ type: "form", title: "Stalling" });
+	expect(form().fields.map((f: any) => [f.id, f.type, f.value])).toEqual([["on", "switch", true], ["after", "duration", 4320], ["warnAfter", "duration", 2880], ["remindEvery", "duration", 1440], ["weekends", "switch", true]]);
+	expect(field("warnAfter")).toMatchObject({ min: 1, max: 4319 });
+	expect(field("remindEvery")).toMatchObject({ none: "Never", presets: expect.arrayContaining([{ value: null }]) });
+	await event("field", { form: "stall", field: "after", value: 90 }, "screen:labels");
+	expect(toasts().at(-1)).toMatchObject({ text: expect.stringContaining("Rows turn amber before tasks stall") });
+	await event("field", { form: "stall", field: "warnAfter", value: 30 }, "screen:labels");
+	await event("field", { form: "stall", field: "after", value: 90 }, "screen:labels");
+	expect(saved.at(-1)!.stall).toMatchObject({ after: 90, warnAfter: 30 });
+	expect(field("warnAfter").max).toBe(89);
+	expect(field("warnAfter").presets.map((p: any) => p.value)).toEqual([30, 60]);
+	await event("field", { form: "stall", field: "remindEvery", value: null }, "screen:labels");
+	expect(saved.at(-1)!.stall.remindEvery).toBeNull();
+	await event("field", { form: "stall", field: "on", value: false }, "screen:labels");
+	expect(form().fields.map((f: any) => f.id)).toEqual(["on"]);
+	await event("work", { rowId: "2" });
+	expect(rows().find((r) => r.id === "2").actions).not.toContain("stall");
+	expect(table().sections[1].sections.map((s: any) => s.id)).toEqual(["working", "snoozed", "watching"]);
+});
+
+test("the Workflow menu follows the list: Progressing's states under their heading", async () => {
+	await start(fixture());
+	const status = tree("screen:tasks").filters[0];
+	expect(status.options.map((o: any) => [o.value, o.section])).toEqual([["inbox", undefined], ["working", "Progressing"], ["stalled", "Progressing"], ["snoozed", "Progressing"], ["watching", "Progressing"], ["settled", undefined], ["archived", undefined]]);
 });

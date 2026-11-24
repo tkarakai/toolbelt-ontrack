@@ -329,6 +329,8 @@ describe("the state machine", () => {
 	function inState(state: m.TaskState) {
 		const { d, ids } = setup(["t"]);
 		const id = ids[0]!;
+		// Stalled is reached from Working on.
+		if (state === "stalled") life.transition(d, id, "working", {}, NOW);
 		if (state !== "inbox") life.transition(d, id, state, { until: NOW + H, watch: {} }, NOW);
 		return { d, id };
 	}
@@ -349,11 +351,13 @@ describe("the state machine", () => {
 			}
 	});
 
-	test("the table: P is the way back, Z/W/S go in, and only Snoozed and Watching move to themselves", () => {
+	test("the table: P is the way back, Z/W/S go in, only Working on stalls, and only Snoozed and Watching move to themselves", () => {
 		for (const from of life.STATES) {
 			const moves = life.TRANSITIONS[from];
 			expect(moves.includes("inbox")).toBe(from !== "inbox");
-			expect(moves.includes("working")).toBe(from === "inbox");
+			// Starting work, or going back to it from Stalled (through the next step).
+			expect(moves.includes("working")).toBe(from === "inbox" || from === "stalled");
+			expect(moves.includes("stalled")).toBe(from === "working");
 			expect(moves.includes(from)).toBe(from === "snoozed" || from === "watching");
 			expect(moves.includes("watching")).toBe(true);
 		}
@@ -367,8 +371,126 @@ describe("the state machine", () => {
 		expect(life.refusal(t("settled"), "snoozed")).toBe("Reopen it first (P), then snooze it.");
 		expect(life.refusal(t("watching"), "snoozed")).toBe("Stop watching it first (P), then snooze it.");
 		expect(life.refusal(t("settled"), "settled")).toBe("Already settled.");
+		expect(life.refusal(t("inbox"), "stalled")).toBe("Only a task you're working on can stall.");
+		expect(life.refusal(t("stalled"), "stalled")).toBe("Already stalled.");
 		const { d, id } = inState("inbox");
 		life.archive(d, id, NOW);
 		for (const to of life.STATES) expect(() => life.transition(d, id, to, opts, NOW)).toThrow("Unarchive it first (A).");
+	});
+});
+
+describe("stalling", () => {
+	// NOW is Saturday, Nov 14 2026, at noon.
+	const day = (n: number, hour = 12, minute = 0) => new Date(2026, 10, 14 + n, hour, minute).getTime();
+
+	function working() {
+		const { d, ids } = setup(["t"]);
+		const id = ids[0]!;
+		life.transition(d, id, "working", {}, NOW);
+		return { d, id, t: m.findTask(d, id) };
+	}
+
+	test("untouched for 3 days, a task stalls, unread; its row warns from 2 days", () => {
+		const { d, id, t } = working();
+		expect(t.touched).toBe(NOW);
+		expect(life.stallsAt(d, t)).toBe(day(3));
+		expect(life.nextWake(d, NOW)).toBe(day(3));
+		expect(life.stallWarning(d, t, day(2) - 1)).toBe(false);
+		expect(life.stallWarning(d, t, day(2))).toBe(true);
+		expect(life.tick(d, day(3) - 1)).toBe(false);
+		expect(life.tick(d, day(3))).toBe(true);
+		expect(t).toMatchObject({ state: "stalled", unread: true, unreadReason: "Stalled · untouched 3 days", stalledAt: day(3), stalls: 1 });
+		// Its work session ended when it stalled.
+		expect(t.sessions.at(-1)!.end).toBe(day(3));
+		expect(life.inSection(d, "stalled").map((x) => x.id)).toEqual([id]);
+	});
+
+	test("thresholds go down to minutes", () => {
+		const { d, t } = working();
+		m.setStall(d, { after: 45, warnAfter: 20 });
+		expect(life.stallsAt(d, t)).toBe(day(0, 12, 45));
+		expect(life.stallWarning(d, t, day(0, 12, 20))).toBe(true);
+		life.tick(d, day(0, 12, 45));
+		expect(t).toMatchObject({ state: "stalled", unreadReason: "Stalled · untouched 45 minutes" });
+	});
+
+	test("updates and edits put the clock back; labels, relations and order don't", () => {
+		const { d, id, t } = working();
+		m.addUpdate(d, id, "drafted it", day(1));
+		expect(life.stallsAt(d, t)).toBe(day(4));
+		m.updateTask(d, id, { name: "t", due: "", desc: "", labels: { 3: "High" } }, day(2));
+		expect(t.touched).toBe(day(1));
+		m.updateTask(d, id, { name: "t", due: "", desc: "more", labels: { 3: "High" } }, day(2));
+		expect(t.touched).toBe(day(2));
+		const other = m.addTask(d, { name: "o", due: "", desc: "", labels: {} }, day(3));
+		m.relate(d, id, "relatedTo", other.id, false, day(3));
+		expect(t.touched).toBe(day(2));
+		// A new subtask is work on its parent; so is a subtask settled.
+		m.setParent(d, other.id, id, day(3));
+		expect(t.touched).toBe(day(3));
+		life.transition(d, other.id, "settled", {}, day(4));
+		expect(t.touched).toBe(day(4));
+	});
+
+	test("touching a stalled task brings it back to the top of Working on; the count stays", () => {
+		const { d, id, t } = working();
+		life.tick(d, day(3));
+		m.addUpdate(d, id, "Next: write the first paragraph", day(3, 13));
+		expect(life.resumeTouched(d, day(3, 13))).toEqual([id]);
+		expect(t).toMatchObject({ state: "working", unread: false, stalls: 1, touched: day(3, 13) });
+		expect(t.stalledAt).toBeUndefined();
+		expect(t.sessions.at(-1)).toEqual({ start: day(3, 13), by: "me" });
+		// It stalls again three days later, saying it did before.
+		life.tick(d, day(6, 13));
+		expect(t).toMatchObject({ state: "stalled", unreadReason: "Stalled · untouched 3 days · stalled 1× before", stalls: 2 });
+	});
+
+	test("a stalled task reminds you every day, or as often as set, or never", () => {
+		const { d, t } = working();
+		life.tick(d, day(3));
+		life.markRead(t);
+		expect(life.remindsAt(d, t)).toBe(day(4));
+		expect(life.tick(d, day(4) - 1)).toBe(false);
+		expect(life.tick(d, day(4))).toBe(true);
+		expect(t).toMatchObject({ state: "stalled", unread: true, unreadReason: "Still stalled · untouched 4 days · stalled for 1 day", remindedAt: day(4) });
+		m.setStall(d, { remindEvery: 90 });
+		expect(life.remindsAt(d, t)).toBe(day(4, 13, 30));
+		m.setStall(d, { remindEvery: null });
+		expect(life.remindsAt(d, t)).toBeUndefined();
+	});
+
+	test("without weekends, time on Saturdays and Sundays doesn't count", () => {
+		const { d, t } = working();
+		m.setStall(d, { weekends: false });
+		// Started Saturday noon: the clock starts Monday at midnight, so 3 days end Thursday at midnight.
+		expect(life.stallsAt(d, t)).toBe(new Date(2026, 10, 19).getTime());
+		expect(life.untouched(d, t, day(1))).toBe(0);
+		expect(life.stallWarning(d, t, new Date(2026, 10, 18).getTime())).toBe(true);
+		// Friday noon to Tuesday noon: Friday's afternoon and Monday counted, the weekend not.
+		expect(life.elapsed(day(-1), day(3), { weekends: false })).toBe(48 * H);
+	});
+
+	test("⇧P stalls it by hand, read; P brings it to the Inbox; it can't go back to work by a drop; archiving clears it", () => {
+		const { d, id, t } = working();
+		life.transition(d, id, "stalled", {}, NOW + H);
+		expect(t).toMatchObject({ state: "stalled", unread: false, stalls: 1 });
+		expect(() => life.drop(d, id, "working", null, NOW + H)).toThrow(life.NEXT_STEP);
+		expect(() => life.move(d, id, 1, NOW)).toThrow("Stalled tasks are ordered by when they stalled.");
+		life.transition(d, id, "inbox", {}, NOW + 2 * H);
+		expect(t).toMatchObject({ state: "inbox", unread: true, unreadReason: "Back from Stalled" });
+		life.transition(d, id, "working", {}, NOW + 3 * H);
+		life.transition(d, id, "stalled", {}, NOW + 4 * H);
+		life.archive(d, id, NOW + 5 * H);
+		expect(t).toMatchObject({ state: "inbox", archived: true, stalls: 2 });
+		expect(t.stalledAt).toBeUndefined();
+	});
+
+	test("with stalling off, nothing stalls, warns or reminds", () => {
+		const { d, t } = working();
+		m.setStall(d, { on: false });
+		expect(life.stallsAt(d, t)).toBeUndefined();
+		expect(life.stallWarning(d, t, day(10))).toBe(false);
+		expect(life.tick(d, day(10))).toBe(false);
+		expect(t.state).toBe("working");
 	});
 });

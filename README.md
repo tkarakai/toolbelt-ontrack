@@ -15,9 +15,11 @@ keeps room for a real agent later.
 - **Tasks** is grouped by Workflow to start with, in sections. There is no Pinned section: to keep
   some tasks in view, give them a yes/no label (say, *Pinned*) and filter by it. **Inbox** holds
   open tasks in your order; new tasks and tasks that come back land at the top. **Progressing**
-  holds everything still in motion, in three sub-sections, one per state: **Working on**, what
-  you're doing now, in your order; **Snoozed**, hidden until its wake time, soonest first; and
-  **Watching**, tasks out of your hands for now, next check-in first (see [Watching](#watching)).
+  holds everything still in motion, in four sub-sections, one per state: **Working on**, what
+  you're doing now, in your order; **Stalled**, tasks you chose but stopped touching, longest
+  stalled first (see [Stalling](#stalling)); **Snoozed**, hidden until its wake time, soonest
+  first; and **Watching**, tasks out of your hands for now, next check-in first (see
+  [Watching](#watching)).
   No task sits directly under Progressing; each sub-section shows even when it's empty and
   collapses on its own. **Settled** (done) is a collapsed shelf, newest first. **Archived** tasks
   are out of the way: include *Archived* in the Workflow filter and they show in a last, dimmed,
@@ -29,7 +31,7 @@ keeps room for a real agent later.
 - **Dots** sit to the left of a task's name, so names line up: blue for unread, red for overdue
   (the red one to the left of the blue one).
 - **Keys** follow the [state machine](#states-and-keys): P starts work or brings a task back to
-  the Inbox; Z, W and S snooze, watch and settle. **A** archives and unarchives. **E** edits,
+  the Inbox; ⇧P marks a task you're working on stalled; Z, W and S snooze, watch and settle. **A** archives and unarchives. **E** edits,
   **↵** or **⇧U** adds an update, **R** goes to the drawer's Related field, **U** marks read/unread, **⌥↑/⌥↓** move (Inbox
   and Working on), **⌥→/⌥←** make a subtask or move it out (with [subtasks](#subtasks) on), and
   **Delete** is in the ⋯ menu.
@@ -43,21 +45,23 @@ keeps room for a real agent later.
 - **Drag** tasks within the Inbox and Working on to order them, or between groups. A drop
   into a Workflow group is the same move as its key and follows the same
   [state machine](#states-and-keys): into the Inbox is P, onto Settled settles, into Snoozed or
-  Watching opens the same dialog as Z or W, onto Archived archives (and out of it unarchives),
+  Watching opens the same dialog as Z or W, out of Stalled into Working on opens the Next step
+  box, onto Archived archives (and out of it unarchives),
   and a move the keys don't allow (Snoozed straight to Working on, say) is refused with a
   hint. A drop lands in the sub-section it's in; a drop on the Progressing header itself starts
   work. A drop into a label's group sets that value (into its *No* group clears it), and into
   Due's Today or No date sets or clears the due date; one Undo reverts the whole drop.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
-  often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Keeping a
+  often), it stalled or is still stalled, the due date arrived, a task blocking it was settled, or all its subtasks were settled. Keeping a
   task open for about two seconds marks it read. Nothing settles on its own.
 - Search matches names, descriptions, updates and label values.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
-- **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
-  own New button above it.
+- **Settings** (⌘S) defines labels (with color swatches) and relation types, each table with its
+  own New button above it, and how tasks stall (see [Stalling](#stalling)).
 - The menu-bar **quick view** is a focus list in the table's order: the Inbox, then what you're
-  working on (with elapsed time and its latest update). Each task shows one icon for its state;
+  working on (with elapsed time and its latest update), then what stalled. On a stalled task, U
+  writes its next step, which brings it back to Working on, and P brings it back to the Inbox. Each task shows one icon for its state;
   unread tasks are bold with a blue dot, overdue ones have a red dot and a red title, as in the table. Without opening the window you can
   jot a new task into the Inbox (N, then ↵), start or stop working (P), add an update (U, then ↵),
   settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
@@ -75,7 +79,8 @@ or across the divider to start or stop grouping by it (⌥← / ⌥→ on a focu
 same). Turning Group by on adds the filter as the last level; turning it off puts it first among
 the rest. Everything here is saved; the search isn't.
 
-- **Workflow** offers the five states and Archived. It starts on *Ongoing* (everything but
+- **Workflow** offers the six states and Archived, the way the list groups them: the Inbox, then
+  Progressing's four states under that heading, then Settled and Archived. It starts on *Ongoing* (everything but
   Archived), and **Reset to Ongoing** brings that back.
 - **Due** offers Overdue (open tasks past due), Today, Next 6 days, Later, Past (finished tasks
   with an earlier date) and No date. Groups move on by themselves at midnight.
@@ -159,19 +164,23 @@ drag, the drawer's Workflow and the quick view all go through it, and anything e
 with a hint (for example "Bring it back to the Inbox first (P), then start working on it.").
 **P** is the way back: it starts work from the Inbox and brings a task back to the Inbox from
 anywhere else. **Z**, **W** and **S** put a task in Snoozed, Watching or Settled, or change it
-when it's already there.
+when it's already there. **⇧P** marks a task you're working on stalled; writing its next step
+(**↵**) brings it back.
 
-| From \ key | **P** | **Z** | **W** | **S** |
-| --- | --- | --- | --- | --- |
-| **Inbox** | → Working on | → Snoozed (menu) | → Watching (dialog) | → Settled |
-| **Working on** | → Inbox (Done for now, unread) | → Snoozed | → Watching | → Settled |
-| **Snoozed** | → Inbox (wake) | change the snooze time | → Watching | → Settled |
-| **Watching** | → Inbox (stop watching) | — | change the watch | → Settled |
-| **Settled** | → Inbox (reopen) | — | → Watching | — |
-| *Archived* | **A** unarchives; E edits, ⇧U adds an update, Delete | | | |
+| From \ key | **P** | **⇧P** | **Z** | **W** | **S** |
+| --- | --- | --- | --- | --- | --- |
+| **Inbox** | → Working on | — | → Snoozed (menu) | → Watching (dialog) | → Settled |
+| **Working on** | → Inbox (Done for now, unread) | → Stalled | → Snoozed | → Watching | → Settled |
+| **Stalled** | → Inbox (unread) | — | → Snoozed | → Watching | → Settled |
+| **Snoozed** | → Inbox (wake) | — | change the snooze time | → Watching | → Settled |
+| **Watching** | → Inbox (stop watching) | — | — | change the watch | → Settled |
+| **Settled** | → Inbox (reopen) | — | — | → Watching | — |
+| *Archived* | **A** unarchives; E edits, ⇧U adds an update, Delete | | | | |
+
+From Stalled, ↵ (an update) is the way back to Working on: see [Stalling](#stalling).
 
 Three rules keep it simple. **P** into the Inbox always marks the task unread, saying why (Back
-from Working on, Back from Snoozed, Back from Watching, Reopened from Settled); P into Working
+from Working on, Back from Stalled, Back from Snoozed, Back from Watching, Reopened from Settled); P into Working
 on it reads it, since you just chose it. **Z** always asks how long (starting from the current
 wake time when it's already snoozed), and **W** always asks when to check in, whether from the
 key, a drag, the drawer's Workflow or the quick view. Snoozing a task in Watching or Settled needs
@@ -179,9 +188,52 @@ P first.
 
 On their own: a snooze ending, a check-in coming due or a due date arriving brings a task back
 to the top of the Inbox, unread, saying why. A task a check-in brought back stays watched (an eye
-mark), so **W** from the Inbox is that check-in. The drawer's Workflow lists the same states, in the
-same order (Inbox, Working on, Snoozed, Watching, Settled), but only those the task can move
-to from where it is. An archived task doesn't move until it's unarchived (A).
+mark), so **W** from the Inbox is that check-in. A task you're working on and leave untouched
+stalls, and a stalled task you touch goes back to Working on (see [Stalling](#stalling)). The
+drawer's Workflow lists the same states, in the same order (Inbox, Working on, Stalled, Snoozed,
+Watching, Settled), but only those the task can move to from where it is. An archived task doesn't move until it's unarchived (A).
+
+### Stalling
+
+Some tasks you start, then stop touching: still yours, still chosen, but not happening. Working
+on should mean *now*, so those move to **Stalled**, under Progressing, where you can see them.
+
+- **Amber first.** A task in Working on without an update or edit for 2 days says so in its When
+  column, in amber (`Untouched 2 days`), and its drawer has a *Stalls soon* section saying when.
+- **Then it stalls.** After 3 days it moves to Stalled, unread, saying why: `Stalled · untouched
+  3 days · stalled 2× before`. Its work session ends, so time worked stays honest. **⇧P** (Mark
+  stalled, or a drag into Stalled) stalls a task yourself, read.
+- **It reminds you.** While it stays stalled, it's marked unread again every day: `Still stalled ·
+  untouched 5 days · stalled for 2 days`.
+- **Touching it brings it back.** Only real work counts: an update written or edited, its name,
+  description or due date changed, a subtask added or settled. Opening it, reading it, its labels,
+  relations or place in a list don't.
+
+A stalled row reads `Untouched 6 days · stalled 3×`. Its drawer has a *Stalled* section: how long
+it's been untouched, since when it's stalled, how many times and the next reminder. Then decide:
+
+- **Write the next step** (↵, Write the next step in its actions, or U in the quick view): the
+  smallest concrete thing to do, as an update. Saving it moves the task back to the top of
+  Working on. Dragging it back to Working on, or choosing Working on in the drawer's Workflow,
+  opens a *Next step* box for the same.
+- **Snooze** it (Z) if you're putting it off on purpose; **Watch** it (W) if it turns out you're
+  waiting on someone; **P** brings it back to the Inbox when you're no longer committed; **Settle**
+  (S) drops it or calls it done.
+
+A task remembers how many times it stalled, so the ones you keep avoiding show.
+
+**Settings** (⌘S) has a Stalling section, each change saved at once. Lengths of time are edited
+as days, hours and minutes: ↑/↓ step the part you're on, digits type it, and the menu at the end
+offers quick picks.
+
+- **Stall tasks left untouched**: on by default. Off, nothing stalls, warns or reminds, ⇧P isn't
+  offered, and Stalled shows only while tasks are still in it.
+- **Stall after**: 3 days by default, anywhere from 2 minutes to 30 days.
+- **Turn amber after**: 2 days by default, always sooner than Stall after (it can't be set later).
+  To stall sooner than amber allows, turn amber earlier first.
+- **Remind me every**: a day by default, any length up to 30 days, or Never.
+- **Count weekends**: on by default. Off, time on Saturdays and Sundays doesn't count: a task
+  touched on Friday at 5 PM with 3 days to stall stalls on Wednesday at 5 PM.
 
 ### Watching
 
