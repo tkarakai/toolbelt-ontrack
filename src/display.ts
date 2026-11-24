@@ -14,14 +14,14 @@ export const STATUS = "status";
 export const DUE = "due";
 export const labelFilterId = (label: Pick<Label, "id">) => `label:${label.id}`;
 
-/** The Status filter's values, in list order: the five states, then Archived. */
-export const STATUS_VALUES = ["inbox", "working", "snoozed", "watching", "settled", "archived"] as const;
+/** The Status filter's values, in list order: the six states, then Archived. */
+export const STATUS_VALUES = ["inbox", "working", "stalled", "snoozed", "watching", "settled", "archived"] as const;
 export type StatusValue = (typeof STATUS_VALUES)[number];
 /** Status starts on everything but Archived: "Ongoing". */
-export const ONGOING: StatusValue[] = ["inbox", "working", "snoozed", "watching", "settled"];
-export const STATUS_LABELS: Record<StatusValue, string> = { inbox: "Inbox", working: "Working on", snoozed: "Snoozed", watching: "Watching", settled: "Settled", archived: "Archived" };
+export const ONGOING: StatusValue[] = ["inbox", "working", "stalled", "snoozed", "watching", "settled"];
+export const STATUS_LABELS: Record<StatusValue, string> = { inbox: "Inbox", working: "Working on", stalled: "Stalled", snoozed: "Snoozed", watching: "Watching", settled: "Settled", archived: "Archived" };
 /** The states shown together under Progressing. */
-export const PROGRESSING_STATES: StatusValue[] = ["working", "snoozed", "watching"];
+export const PROGRESSING_STATES: StatusValue[] = ["working", "stalled", "snoozed", "watching"];
 
 /** Due buckets, in list order. Overdue is for open tasks; a finished task's past date is Past. */
 export const DUE_BUCKETS = [
@@ -173,7 +173,8 @@ export type Looks = {
 /**
  * The table's sections for the grouping filters, nested in the row's order, and each task's
  * group (its innermost section's id). Only groups with tasks show, except at the top level of a
- * Status grouping, where each selected state shows even when empty, as before. Settled and
+ * Status grouping, where each selected state shows even when empty, as before (Stalled only while
+ * stalling is on). Settled and
  * Archived start collapsed. A section's id is its path of `<filter code>=<value>` segments, so
  * a drop names every value it means.
  */
@@ -205,7 +206,7 @@ export function groupTasks(data: Data, tasks: Task[], now: number, looks: Looks,
 				if (PROGRESSING_STATES.includes(value as StatusValue)) {
 					if (value !== progressing[0]) continue;
 					// Progressing: its states one level further in (their ids don't name it, as before).
-					const subs = progressing.map((v) => node(v, by(v), path, looks.status(v as StatusValue), top)).filter((s): s is Section => !!s);
+					const subs = progressing.map((v) => node(v, by(v), path, looks.status(v as StatusValue), top && (v !== "stalled" || data.stall.on))).filter((s): s is Section => !!s);
 					if (subs.length || top) out.push({ id: [...path, PROGRESSING].join("/"), ...looks.status("progressing"), sections: subs });
 					continue;
 				}

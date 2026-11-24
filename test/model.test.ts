@@ -213,8 +213,11 @@ test("schema 1 data gets a lifecycle; Status Done becomes settled", () => {
 	expect(() => m.upgrade5to6(six)).toThrow(m.InvalidInput);
 	const seven = m.upgrade6to7(six);
 	expect(seven.subtasks).toBe("off");
-	expect(m.parseData(JSON.parse(JSON.stringify(seven)))).toEqual(JSON.parse(JSON.stringify(seven)));
 	expect(() => m.upgrade6to7(seven)).toThrow(m.InvalidInput);
+	const eight = m.upgrade7to8(seven);
+	expect(eight.stall).toEqual(m.DEFAULT_STALL);
+	expect(m.parseData(JSON.parse(JSON.stringify(eight)))).toEqual(JSON.parse(JSON.stringify(eight)));
+	expect(() => m.upgrade7to8(eight)).toThrow(m.InvalidInput);
 	expect(four.order).toEqual({ inbox: [1], working: [] });
 	expect(four.tasks.some((t: any) => "pinned" in t)).toBe(false);
 	expect(four.labels).toEqual(three.labels); // nothing was pinned, so no label
@@ -352,4 +355,22 @@ describe("label shades", () => {
 		const flag = m.addLabel(d, { name: "Flag", type: "bool", color: "blue", values: [], freeform: false, shades: "strongest-first" });
 		expect(flag.shades).toBeUndefined();
 	});
+});
+
+test("stalling settings are checked together: amber before stalling, sensible ranges; damaged ones are repaired", () => {
+	const d = m.seed();
+	expect(d.stall).toEqual({ on: true, after: 3, warnAfter: 2, remindEvery: 1, at: 9, weekends: true });
+	m.setStall(d, { after: "5", warnAfter: "4" });
+	expect(d.stall).toMatchObject({ after: 5, warnAfter: 4 });
+	expect(() => m.setStall(d, { after: 4 })).toThrow("Rows turn amber before tasks stall");
+	expect(() => m.setStall(d, { warnAfter: 5 })).toThrow("Rows turn amber before tasks stall");
+	expect(() => m.setStall(d, { after: 1, warnAfter: 0 })).toThrow("2 to 30 days");
+	expect(() => m.setStall(d, { remindEvery: -1 })).toThrow("never");
+	expect(() => m.setStall(d, { at: 24 })).toThrow("hour");
+	expect(d.stall).toMatchObject({ after: 5, warnAfter: 4 });
+	m.setStall(d, { on: false, weekends: false });
+	expect(d.stall).toMatchObject({ on: false, weekends: false });
+	const loaded = m.parseData({ ...JSON.parse(JSON.stringify(m.seed())), stall: { after: 4, warnAfter: 9, at: "x", weekends: false } });
+	expect(loaded.stall).toEqual({ on: true, after: 4, warnAfter: 2, remindEvery: 1, at: 9, weekends: false });
+	expect(m.parseData({ ...JSON.parse(JSON.stringify(m.seed())), stall: undefined }).stall).toEqual(m.DEFAULT_STALL);
 });

@@ -18,7 +18,7 @@ The Tasks table (id `tasks`) declares `appearance: "document"`, `selectEvents`, 
 and, while anything groups, `sections` and `reorder`; New task has key N. Its columns are the
 name (the task id as its `prefix` pill), Due and When. An overdue task's red dot is `Row.dot`. The sections come from the filter
 row (see [Filters and grouping](#filters-and-grouping)): with the default Status grouping they
-are inbox, progressing (no rows of its own; sub-sections working, snoozed, watching), settled and,
+are inbox, progressing (no rows of its own; sub-sections working, stalled, snoozed, watching), settled and,
 when Archived is shown, archived, with the same ids as before. Each row's `group` is its innermost
 section's id. Snoozed, Watching, Settled, Archived and label groups sort themselves (`order:
 "fixed"`). Undo toasts carry `key: "cmd+z"` (`ui.toast-key`). Saving a new task calls `navigate("tasks", {select})` so the
@@ -61,7 +61,7 @@ it in step with the labels (run on load and after every event), `setSelection` a
 apply `filter` and `filter-arrange` events, and `arrange` refuses more than `MAX_LEVELS` (10)
 levels, Status counting two for Progressing. `ui.ts` sends each filter with faceted counts (the
 search and the other filters applied), `groupDisabled` once it couldn't fit, and Status's
-`default` (Ongoing: every state but archived). Filter values are Status values (the five states
+`default` (Ongoing: every state but archived). Filter values are Status values (the six states
 and `archived`), Due buckets (`overdue` open tasks past due, `today`, `next6`, `later`, `past`
 finished tasks, `none`; `dueBucket`) and label values, with `__none` for no value and `yes` for a
 yes/no label. Filter events save the data but don't withdraw a standing Undo, and Undo keeps the
@@ -71,7 +71,7 @@ current filter row.
 first) by the grouping filters. A section's id is its path of segments joined by `/`: a Status
 value as is (`inbox`; Progressing's states don't include `progressing`), `d=<bucket>` for Due and
 `l<id>=<value>` (URI-encoded) for a label. Only groups with tasks are declared, except each
-selected state at the top of a Status grouping. `LOOKS` in `ui.ts` gives each group its label,
+selected state at the top of a Status grouping (Stalled only while stalling is on). `LOOKS` in `ui.ts` gives each group its label,
 icon, collapsed/muted state and drop behavior. `dropTarget` reads a drop's section id back into
 values; `dropInto` in `plugin.ts` sets labels and the due date (only Today or No date can be
 set; other Due groups refuse), then archives (onto Archived), unarchives (out of it) and makes the
@@ -118,6 +118,11 @@ it mounts fresh, empty and focused (`autofocus`). Timeline actions arrive with
 `{timeline, entryId}`; in the drawer they carry `rowId` instead of a dialog. The dialog remains
 for narrow windows and for Change times…, which opens it on one update (`closeAfter`).
 
+A stalled task's Updates dialog has `resume`: titled *Next step*, it closes once the update is
+added, and that update brings the task back to Working on. `moveTo` opens it for a stalled
+task moving to Working on (a drag, the drawer's Status), as do `add-update` without text and
+`resume` when the host sends them.
+
 The Watch dialog (id `watch`, view state `WatchDialog`: `on`, a `repeat` id from `REPEATS`,
 `next` as a local datetime and `nextSet`) opens from `watch` and the drawer's
 Status. Until the person picks `next`, changing `repeat` moves it to the default for that
@@ -133,11 +138,14 @@ for every move into the Inbox, the watch bookkeeping (`watchInto`), the snooze t
 its relations, and order. The clock (`tick`) and drags (`drop`) call it too.
 
 Each move has one action id, and `actionsFor` derives a row's moves from the table
-(`actionFor`): P is `work` from the Inbox and, back to the Inbox, `done` (Working on), `wake`
-(Snoozed), `unwatch` (Watching) and `reopen` (Settled); Z `snooze`, W `watch`, S `settle`. In
-the plugin, every entry point (row actions, drags, the drawer's Status, the quick view) goes
-through `moveTo`: Snoozed and Watching open their dialog (from the quick view, in the main
-window), whose save is the `transition`; other states are a `transition` at once. The drawer's
+(`actionFor`): P is `work` from the Inbox and, back to the Inbox, `done` (Working on), `unstall`
+(Stalled), `wake` (Snoozed), `unwatch` (Watching) and `reopen` (Settled); ⇧P `stall` (only while
+stalling is on), Z `snooze`, W `watch`, S `settle`. Stalled → Working on is `resume` (Write the
+next step, `focus: "update"`): it lands in the drawer's update box, and the update brings the
+task back. In the plugin, every entry point (row actions, drags, the drawer's Status, the quick
+view) goes through `moveTo`: Snoozed and Watching open their dialog (from the quick view, in the
+main window), whose save is the `transition`, and a stalled task going to Working on opens its
+Next step box; other states are a `transition` at once. The drawer's
 Status offers only the states the table allows from where the task is. Other row keys: A
 archive/unarchive (a flag, not a state), E edit, ⇧U add update, R relate, U read/unread. Actions
 sharing a key never appear on the same row.
@@ -149,10 +157,33 @@ Saving moves it to Watching, which counts the check and logs it as an update. Fr
 shows in the main window. A drop into Watching of such a task opens the same dialog.
 
 The quick view is a `stack`: a one-line `quick-task` composer (N) that adds to the Inbox, then the
-`focus` list (Inbox, then Working on, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
+`focus` list (Inbox, then Working on, then Stalled, in table order; each item's `icon` is its state's from `STATE_ICONS`, the one icon per state and group that headers, drop targets and the When column also use; and
 its only `dot` and its red `titleStyle` mark overdue), whose items offer `add-update` with `input` (U), `snooze:tomorrow` (Z),
 `watch` (W, on tasks back from a check-in; opens the main window), Z also on tasks being worked
-on, and the lifecycle actions.
+on, and the lifecycle actions. A stalled task offers `add-update` (U, its next step), `unstall`
+(P), Z and S.
+
+### Stalling
+
+`data.stall` (`StallSettings`: `on`, `after`, `warnAfter`, `remindEvery`, `at`, `weekends`) is
+edited by Settings' Stalling card, a form `stall` whose fields save one at a time through
+`setStall`, which checks them together (`after` 2–30, `warnAfter` 1 to `after` − 1,
+`remindEvery` 0–30 with 0 for never, `at` 0–23). `parseData` repairs damaged settings to their
+defaults (`DEFAULT_STALL`: on, 3, 2, 1, 9, true).
+
+A task's `touched` is its last real work. `model.ts` sets it when an update is added or its text
+edited, when the name, description or due date changes (`updateTask`) and when it gets a
+subtask (`relate`, `setParent`); `lifecycle.ts` when it moves into Working on and when one of
+its subtasks settles. Labels, relations, order and reading don't touch it.
+
+Days are counted on the local calendar (`daysSince`, `daysAfter`), weekdays only without
+`weekends`. `stallsAt` is `after` counted days after `touched`'s day, at `at` o'clock;
+`stallWarning` (the amber When cell and the drawer's line) holds from `warnAfter` counted days;
+`remindsAt` is `remindEvery` counted days after `remindedAt`. `tick` stalls a task whose time
+came (unread, `stallReason`), reminds (unread again, `reminderReason`, `remindedAt` moves on)
+and first runs `resumeTouched`: a stalled task touched after `stalledAt` goes back to the top of
+Working on. The plugin runs `resumeTouched` after each event too, to toast it. `nextWake`
+includes stall and reminder times.
 
 ## Code ownership
 
@@ -166,14 +197,14 @@ on, and the lifecycle actions.
 | `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
 | `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
-| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6 → 7. |
+| `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. |
 | `scripts/` | Build, package and clean-archive verification. |
 
 ## Data
 
-Schema 7 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
-`relationTypes`, `order` (`inbox`, `working`: task ids in the person's order) and `filters` (the
-filter row, above) and `subtasks` (how subtasks show). IDs
+Schema 8 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
+`relationTypes`, `order` (`inbox`, `working`: task ids in the person's order), `filters` (the
+filter row, above), `subtasks` (how subtasks show) and `stall` (stalling settings, above). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
@@ -190,13 +221,15 @@ wall-clock string, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, deliberately without a ti
 `{task, type}` is stored on one task and read from both sides through the relation type's `name`
 and `inverse`.
 
-Each task has `state` (`inbox`, `working`, `snoozed`, `watching`, `settled`), `archived` with
-`archivedAt`,
-`unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`, `dueAnnounced` (the due value already
+Each task has `state` (`inbox`, `working`, `stalled`, `snoozed`, `watching`, `settled`),
+`archived` with `archivedAt`, `unread` with `unreadReason`, `snoozedUntil`, `watch`, `settledAt`,
+`touched`, `stalledAt` and `remindedAt` (while stalled), `stalls` (how many times it stalled,
+kept), `dueAnnounced` (the due value already
 announced, so it's announced once) and `sessions` (`{start, end?, by}`; `by` is `"me"` today and
 leaves room for an agent). A task's section is its `state` (`sectionOf`); there is
-no pinning (a yes/no label does that job). Snoozing and watching keep a task's Inbox/Working
-position.
+no pinning (a yes/no label does that job). Snoozing, watching and stalling keep a task's
+Inbox/Working position; stalling ends the work session, and archiving a stalled task puts it in
+the Inbox.
 
 `watch` is `{on?, since, every?, anchor?, next?, checked?, checks}`: who it waits on, when watching
 started, an optional cadence `{n, unit: "day" | "week" | "month"}`, the first check-in of the
@@ -207,9 +240,10 @@ keeps `watch`, so watching it again is that check (counted, logged as an update)
 deletes it. When a move into Watching gets a date on the old schedule (same cadence), it keeps `anchor`; any
 other date becomes the new `anchor`.
 
-The clock: `tick(now)` wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks
+The clock: `tick(now)` brings touched stalled tasks back to Working on, wakes snoozes that ended (unread, "Snooze ended"), brings watched tasks
 whose check-in came due to the top of the Inbox (unread, with `checkInReason`: who, how long, the
-last check, the cadence), wakes snoozed and watched tasks whose due date arrived and marks open tasks unread when their due date arrives ("Due now").
+last check, the cadence), wakes snoozed and watched tasks whose due date arrived and marks open tasks unread when their due date arrives ("Due now"), then stalls tasks left
+untouched and reminds of stalled ones (see [Stalling](#stalling)).
 Settling marks tasks it blocked unread once nothing else blocks them, and a parent unread once
 all its children are settled. Nothing settles automatically. In active mode a timer runs `tick` at
 the next wake time or at least every minute; every event runs it too. Probe mode starts no timer.
@@ -229,7 +263,9 @@ reused when one of that name exists, only if some task was pinned) and schema 4 
 values become `{text, color}` with colors it uses least, and values tasks typed into a free-text
 label join its list, A–Z, after the listed ones; labels keep showing one color) and schema 5 (the
 filter row starts as the list looked: Status grouping and showing Ongoing, then Due and each
-label; archived tasks get `archivedAt` from `updated`) and schema 6 (`subtasks` starts `off`).
+label; archived tasks get `archivedAt` from `updated`) and schema 6 (`subtasks` starts `off`)
+and schema 7 (`stall` starts with its defaults; a task in Working on gets `touched` from its
+latest work session or update, `lastWork`; a Status filter showing Working on shows Stalled too).
 
 ## Tests
 

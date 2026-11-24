@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- **Stalled**: a new state under Progressing for tasks you chose to work on but stopped touching. A task in Working on without an update or edit for 3 days moves to Stalled at 9:00, unread, saying why (`Stalled · untouched 3 days · stalled 2× before`), and its work session ends. ⇧P (Mark stalled) or a drag into Stalled stalls a task yourself.
+- **Amber before it stalls**: after 2 days untouched, the task's When column says `Untouched 2 days` in amber, and the drawer says when it will stall.
+- **Daily reminders**: while a task stays stalled, it's marked unread again every day at 9:00.
+- **Writing the next step brings it back**: an update (↵, Write the next step, or U in the quick view) moves a stalled task back to the top of Working on. Editing its name, description or due date, or adding or settling a subtask, does too; labels, relations and opening it don't. Dragging it back to Working on, or choosing Working on in the drawer, opens a *Next step* box. P brings it back to the Inbox; Z, W and S work as usual.
+- Stalled rows read `Untouched 6 days · stalled 3×`; the drawer says what gets the task moving. The quick view lists stalled tasks after Working on.
+- **Settings has a Stalling card**: turn stalling off, and choose after how many days tasks stall (3) and turn amber (2, always fewer), how often stalled tasks remind you (every day, every few days or never), at what time (9:00) and whether weekends count.
+- On upgrade, each task in Working on counts as last touched at its latest work session or update, so one untouched past its stall time stalls as soon as OnTrack starts. A Workflow filter that showed Working on shows Stalled too.
+- Data schema 8.
 
 ## 0.13.2 — 2026-11-24
 - The drawer's Parent, Children, Blocked by and Blocks lists drop the state icon before each task (its state pill already says it) and indent the tasks by its width instead (Toolbelt 0.3.23 and later).

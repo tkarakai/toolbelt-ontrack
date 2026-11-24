@@ -2,15 +2,16 @@
 // settle, archive, work sessions); schema 3 adds progress notes (updates) to tasks; schema 4 adds
 // watching and turns pins into a label; schema 5 gives a text label one list of values, each with
 // a color; schema 6 saves the Tasks filter row and when tasks were archived; schema 7 saves how
-// subtasks show. Retry-safe: data already at schema 7 is validated and kept.
+// subtasks show; schema 8 lets tasks you're working on stall, with its settings. Retry-safe: data
+// already at schema 8 is validated and kept.
 import { defineMigration } from "@toolbelt/sdk";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SCHEMA, seed, upgrade1to2, upgrade2to3, upgrade3to4, upgrade4to5, upgrade5to6, upgrade6to7 } from "./model";
+import { SCHEMA, seed, upgrade1to2, upgrade2to3, upgrade3to4, upgrade4to5, upgrade5to6, upgrade6to7, upgrade7to8 } from "./model";
 import { FILE, load, save } from "./store";
 
 defineMigration(({ toSchema, fromSchema, targetDir, progress }) => {
-	if (toSchema !== SCHEMA || !(fromSchema === null || fromSchema === 1 || fromSchema === 2 || fromSchema === 3 || fromSchema === 4 || fromSchema === 5 || fromSchema === 6 || fromSchema === SCHEMA)) throw Error(`Unsupported schema change ${fromSchema} → ${toSchema}`);
+	if (toSchema !== SCHEMA || !(fromSchema === null || fromSchema === 1 || fromSchema === 2 || fromSchema === 3 || fromSchema === 4 || fromSchema === 5 || fromSchema === 6 || fromSchema === 7 || fromSchema === SCHEMA)) throw Error(`Unsupported schema change ${fromSchema} → ${toSchema}`);
 	const file = join(targetDir, FILE);
 	if (!existsSync(file)) {
 		save(targetDir, seed());
@@ -41,8 +42,12 @@ defineMigration(({ toSchema, fromSchema, targetDir, progress }) => {
 		progress("Filters and grouping are now saved");
 	}
 	if (raw?.schema === 6) {
-		save(targetDir, upgrade6to7(raw));
+		raw = upgrade6to7(raw);
 		progress("Subtasks can now nest under their parent");
+	}
+	if (raw?.schema === 7) {
+		save(targetDir, upgrade7to8(raw));
+		progress("Tasks you're working on now stall when left untouched");
 		return;
 	}
 	load(targetDir);

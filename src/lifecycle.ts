@@ -1,14 +1,15 @@
 // Where tasks are and how they move: one state machine, modeled on T3 Code's thread list. A task
-// is in one state, which is also its section: Inbox, Working on, Snoozed, Watching or Settled
-// (the middle three shown together under Progressing). Archived is a flag on top. Every change of
+// is in one state, which is also its section: Inbox, Working on, Stalled, Snoozed, Watching or
+// Settled (the middle four shown together under Progressing). Archived is a flag on top. Every change of
 // state goes through `transition`, which allows only the moves in `TRANSITIONS`. You play the
 // agent's part today: starting work is sending the agent a message, Done for now is the agent
-// finishing its turn. Time and relations can mark tasks unread; nothing settles a task but you.
-import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type Task, type TaskState, type Watch } from "./model";
+// finishing its turn. Time and relations can mark tasks unread, and time stalls a task left
+// untouched; nothing settles a task but you.
+import { addUpdate, CADENCE_UNITS, dueAt, findTask, InvalidInput, type Cadence, type Data, type Order, type StallSettings, type Task, type TaskState, type Watch } from "./model";
 
 export const ME = "me";
 
-export type SectionId = "inbox" | "working" | "watching" | "snoozed" | "settled";
+export type SectionId = "inbox" | "working" | "stalled" | "watching" | "snoozed" | "settled";
 
 /** The task's section, from its state (archived tasks show in none). */
 export function sectionOf(task: Task): SectionId {
@@ -16,14 +17,16 @@ export function sectionOf(task: Task): SectionId {
 }
 
 /**
- * Tasks in a section, in its order: the person's for Inbox/Working, next check-in for Watching
- * (no reminder last), wake time for Snoozed, newest first for Settled.
+ * Tasks in a section, in its order: the person's for Inbox/Working, longest stalled first for
+ * Stalled, next check-in for Watching (no reminder last), wake time for Snoozed, newest first for
+ * Settled.
  */
 export function inSection(data: Data, section: SectionId): Task[] {
 	const tasks = data.tasks.filter((t) => !t.archived && sectionOf(t) === section);
 	if (section === "watching") return tasks.sort((a, b) => (a.watch?.next ?? Infinity) - (b.watch?.next ?? Infinity) || (a.watch?.since ?? 0) - (b.watch?.since ?? 0) || a.id - b.id);
 	if (section === "snoozed") return tasks.sort((a, b) => (a.snoozedUntil ?? 0) - (b.snoozedUntil ?? 0) || a.id - b.id);
 	if (section === "settled") return tasks.sort((a, b) => (b.settledAt ?? 0) - (a.settledAt ?? 0) || b.id - a.id);
+	if (section === "stalled") return tasks.sort((a, b) => (a.stalledAt ?? 0) - (b.stalledAt ?? 0) || a.id - b.id);
 	const order = data.order[section];
 	const rank = (t: Task) => {
 		const i = order.indexOf(t.id);
@@ -90,18 +93,21 @@ export function markRead(task: Task) {
  * Every move a task can make, from each state; nothing else is possible. It drives the keys a
  * row offers, the drawer's Status, drags, the quick view and the clock. P starts work from the
  * Inbox and brings a task back to the Inbox from anywhere else; Z, W and S put it in Snoozed,
- * Watching or Settled. Snoozed → Snoozed and Watching → Watching pick a new time.
+ * Watching or Settled; ⇧P marks a task you're working on stalled (the clock does it too). A
+ * stalled task goes back to Working on when you touch it: write an update or edit it.
+ * Snoozed → Snoozed and Watching → Watching pick a new time.
  */
 export const TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
 	inbox: ["working", "snoozed", "watching", "settled"],
-	working: ["inbox", "snoozed", "watching", "settled"],
+	working: ["inbox", "stalled", "snoozed", "watching", "settled"],
+	stalled: ["working", "inbox", "snoozed", "watching", "settled"],
 	snoozed: ["inbox", "snoozed", "watching", "settled"],
 	watching: ["inbox", "watching", "settled"],
 	settled: ["inbox", "watching"],
 };
 
 /** The states in the order the list and the drawer's Status show them. */
-export const STATES: readonly TaskState[] = ["inbox", "working", "snoozed", "watching", "settled"];
+export const STATES: readonly TaskState[] = ["inbox", "working", "stalled", "snoozed", "watching", "settled"];
 
 export const canTransition = (from: TaskState, to: TaskState) => TRANSITIONS[from].includes(to);
 
@@ -109,7 +115,8 @@ export const canTransition = (from: TaskState, to: TaskState) => TRANSITIONS[fro
 export function refusal(task: Task, to: TaskState): string | undefined {
 	if (task.archived) return "Unarchive it first (A).";
 	if (canTransition(task.state, to)) return undefined;
-	if (task.state === to) return to === "inbox" ? "Already in the Inbox." : to === "working" ? "Already working on it." : "Already settled.";
+	if (task.state === to) return to === "inbox" ? "Already in the Inbox." : to === "working" ? "Already working on it." : to === "stalled" ? "Already stalled." : "Already settled.";
+	if (to === "stalled") return "Only a task you're working on can stall.";
 	if (to === "working") return "Bring it back to the Inbox first (P), then start working on it.";
 	if (to === "snoozed") return task.state === "settled" ? "Reopen it first (P), then snooze it." : "Stop watching it first (P), then snooze it.";
 	return "That move isn't possible from here.";
@@ -120,7 +127,10 @@ export type TransitionOptions = {
 	until?: number;
 	/** Into Watching: who it waits on, the schedule, and a note for a check-in. */
 	watch?: WatchInput;
-	/** Into the Inbox: why it's back, for its unread line (default: where it came from). */
+	/**
+	 * Into the Inbox: why it's back, for its unread line (default: where it came from). Into
+	 * Stalled: why it stalled; it's then unread (the clock), else read (you chose it).
+	 */
 	reason?: string;
 	/** Into the Inbox or Working on: the task it goes before (default: the top). */
 	before?: number | null;
@@ -134,6 +144,7 @@ export type TransitionOptions = {
 const BACK: Record<TaskState, string> = {
 	inbox: "",
 	working: "Back from Working on",
+	stalled: "Back from Stalled",
 	snoozed: "Back from Snoozed",
 	watching: "Back from Watching",
 	settled: "Reopened from Settled",
@@ -141,7 +152,8 @@ const BACK: Record<TaskState, string> = {
 
 /**
  * The one way a task changes state. Refuses moves not in `TRANSITIONS` and archived tasks, then:
- * - into Working on: a work session starts, it's read, and any watch ends;
+ * - into Working on: a work session starts, it's read and touched, and any watch ends;
+ * - into Stalled: counted, with when it stalled; unread with `reason`, else read;
  * - into the Inbox: unread, saying why; a work session ends; leaving Watching ends the watch
  *   (unless a check-in brought it back, `keepWatch`);
  * - into Snoozed: until `until`; into Watching: the watch (`watchInto`);
@@ -158,14 +170,26 @@ export function transition(data: Data, id: number, to: TaskState, opts: Transiti
 	endSession(task, now);
 	if (from === "settled") delete task.settledAt;
 	if (from === "snoozed") delete task.snoozedUntil;
+	if (from === "stalled") {
+		delete task.stalledAt;
+		delete task.remindedAt;
+	}
 	const placeAt = (key: keyof Order) => (opts.before === undefined || opts.before === null ? toTop(data, key, id) : place(data, key, id, opts.before));
 	switch (to) {
 		case "working":
 			delete task.watch;
 			task.state = "working";
 			task.sessions.push({ start: now, by: opts.by ?? ME });
+			task.touched = now;
 			markRead(task);
 			placeAt("working");
+			break;
+		case "stalled":
+			task.state = "stalled";
+			task.stalledAt = task.remindedAt = now;
+			task.stalls = (task.stalls ?? 0) + 1;
+			if (opts.reason) markUnread(task, opts.reason);
+			else markRead(task);
 			break;
 		case "inbox":
 			if (from === "watching" && !opts.keepWatch) delete task.watch;
@@ -186,7 +210,7 @@ export function transition(data: Data, id: number, to: TaskState, opts: Transiti
 			delete task.watch;
 			markRead(task);
 			for (const key of ["inbox", "working"] as const) data.order[key] = without(data.order[key], id);
-			afterSettle(data, task);
+			afterSettle(data, task, now);
 			break;
 	}
 	touch(task, now);
@@ -198,7 +222,9 @@ export function transition(data: Data, id: number, to: TaskState, opts: Transiti
 export function archive(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	endSession(task, now);
-	if (task.state === "working") task.state = "inbox";
+	if (task.state === "working" || task.state === "stalled") task.state = "inbox";
+	delete task.stalledAt;
+	delete task.remindedAt;
 	task.archived = true;
 	task.archivedAt = now;
 	markRead(task);
@@ -217,9 +243,15 @@ export function unarchive(data: Data, id: number, now: number) {
 export function move(data: Data, id: number, by: -1 | 1, now: number) {
 	const task = findTask(data, id);
 	const section = sectionOf(task);
-	if (section === "snoozed" || section === "watching" || section === "settled")
+	if (section !== "inbox" && section !== "working")
 		return fail(
-			section === "snoozed" ? "Snoozed tasks are ordered by wake time." : section === "watching" ? "Watched tasks are ordered by their next check-in." : "Settled tasks are ordered by when they were settled.",
+			section === "snoozed"
+				? "Snoozed tasks are ordered by wake time."
+				: section === "watching"
+					? "Watched tasks are ordered by their next check-in."
+					: section === "stalled"
+						? "Stalled tasks are ordered by when they stalled."
+						: "Settled tasks are ordered by when they were settled.",
 		);
 	const ids = inSection(data, section).map((t) => t.id);
 	const i = ids.indexOf(id);
@@ -234,7 +266,9 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 /**
  * A drag into `section` before task `before`: within its own section it reorders (Inbox,
  * Working on); into another it's that `transition`. Snoozed and Watching need a time, so a
- * drop into them is refused here; the plugin opens the Snooze or Watch dialog instead.
+ * drop into them is refused here; the plugin opens the Snooze or Watch dialog instead. A stalled
+ * task goes back to Working on through an update, so that drop is refused too; the plugin opens
+ * the update box for the next step.
  */
 export function drop(data: Data, id: number, section: SectionId, before: number | null, now: number) {
 	const task = findTask(data, id);
@@ -246,6 +280,7 @@ export function drop(data: Data, id: number, section: SectionId, before: number 
 	if (refused) fail(refused);
 	if (section === "snoozed") fail("Choose Snooze to pick a wake time.");
 	if (section === "watching") fail("Choose Watch to pick when to check in.");
+	if (section === "working" && task.state === "stalled") fail(NEXT_STEP);
 	transition(data, id, section, { before: section === "inbox" || section === "working" ? before : null }, now);
 }
 
@@ -371,31 +406,116 @@ export function nextOnSchedule(task: Task, now: number): number | undefined {
 	return w && w.next === undefined ? undefined : defaultCheck(now);
 }
 
+// ── stalling ────────────────────────────────────────────────────────────
+
+/** What a stalled task needs to go back to Working on. */
+export const NEXT_STEP = "Write the next step (↵) to get back to it.";
+
+const dayStart = (ms: number) => {
+	const d = new Date(ms);
+	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+};
+const nextDay = (day: number) => {
+	const d = new Date(day);
+	return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+};
+const counts = (day: number, s: StallSettings) => s.weekends || (new Date(day).getDay() !== 0 && new Date(day).getDay() !== 6);
+
+/** Days from `from`'s day to `to`'s that count (weekdays only without weekends): 0 on the same day. */
+export function daysSince(from: number, to: number, s: StallSettings): number {
+	let n = 0;
+	const end = dayStart(to);
+	for (let day = nextDay(dayStart(from)); day <= end && n < 100_000; day = nextDay(day)) if (counts(day, s)) n++;
+	return n;
+}
+
+/** The moment `n` counted days after `from`'s day, at the stall hour. */
+export function daysAfter(from: number, n: number, s: StallSettings): number {
+	let day = dayStart(from);
+	for (let k = 0; k < n; ) {
+		day = nextDay(day);
+		if (counts(day, s)) k++;
+	}
+	const d = new Date(day);
+	return new Date(d.getFullYear(), d.getMonth(), d.getDate(), s.at, 0).getTime();
+}
+
+/** When a task you're working on was last touched (starting work counts). */
+const touchedAt = (task: Task) => task.touched ?? workingSince(task) ?? task.updated;
+
+/** When a task you're working on stalls if nobody touches it, while stalling is on. */
+export function stallsAt(data: Data, task: Task): number | undefined {
+	if (!data.stall.on || task.archived || task.state !== "working") return undefined;
+	return daysAfter(touchedAt(task), data.stall.after, data.stall);
+}
+
+/** Counted days since a task was last touched. */
+export const untouchedDays = (data: Data, task: Task, now: number) => daysSince(touchedAt(task), now, data.stall);
+
+/** A task you're working on, untouched long enough to warn about (its row turns amber). */
+export const stallWarning = (data: Data, task: Task, now: number) => data.stall.on && !task.archived && task.state === "working" && untouchedDays(data, task, now) >= data.stall.warnAfter;
+
+/** "3 days", "1 day", "less than a day": counted days, as the settings count them. */
+export const days = (n: number) => (n < 1 ? "less than a day" : `${n} day${n === 1 ? "" : "s"}`);
+
+/** Why it stalled, for its unread line: "Stalled · untouched 3 days · stalled 2× before". */
+export function stallReason(data: Data, task: Task, now: number) {
+	const before = task.stalls ?? 0;
+	return ["Stalled", `untouched ${days(untouchedDays(data, task, now))}`, before ? `stalled ${before}× before` : undefined].filter(Boolean).join(" · ");
+}
+
+/** A reminder's unread line: "Still stalled · untouched 5 days · stalled for 2 days". */
+export function reminderReason(data: Data, task: Task, now: number) {
+	return ["Still stalled", `untouched ${days(untouchedDays(data, task, now))}`, `stalled for ${days(daysSince(task.stalledAt ?? now, now, data.stall))}`].join(" · ");
+}
+
+/** When a stalled task is next marked unread to remind you, while reminders are on. */
+export function remindsAt(data: Data, task: Task): number | undefined {
+	if (!data.stall.on || !data.stall.remindEvery || task.archived || task.state !== "stalled") return undefined;
+	return daysAfter(task.remindedAt ?? task.stalledAt ?? task.updated, data.stall.remindEvery, data.stall);
+}
+
+/**
+ * Stalled tasks touched since they stalled (an update written or edited, the task edited) go back
+ * to the top of Working on. Returns their ids.
+ */
+export function resumeTouched(data: Data, now: number): number[] {
+	const resumed: number[] = [];
+	for (const task of data.tasks)
+		if (task.state === "stalled" && !task.archived && task.touched !== undefined && task.touched > (task.stalledAt ?? Infinity)) {
+			transition(data, task.id, "working", {}, now);
+			resumed.push(task.id);
+		}
+	return resumed;
+}
+
 // ── things that happen on their own ─────────────────────────────────────
 
 /** Tasks a task blocks, and its parent: relations read from the task that holds them. */
 const blockersOf = (data: Data, id: number) => data.tasks.filter((t) => t.relations.some((r) => r.type === "blocks" && r.task === id));
 const childrenOf = (data: Data, id: number) => data.tasks.filter((t) => t.relations.some((r) => r.type === "parent" && r.task === id));
 
-function afterSettle(data: Data, settled: Task) {
+function afterSettle(data: Data, settled: Task, now: number) {
 	// Tasks it blocked, now that nothing else blocks them.
 	for (const r of settled.relations.filter((r) => r.type === "blocks")) {
 		const blocked = data.tasks.find((t) => t.id === r.task);
 		if (blocked && blockersOf(data, blocked.id).every((b) => b.state === "settled")) markUnread(blocked, `Unblocked: #${settled.id} is settled`);
 	}
-	// Its parent, once every child is settled.
+	// Its parent: a settled subtask is work on it; once every child is settled, it's unread.
 	for (const r of settled.relations.filter((r) => r.type === "parent")) {
 		const parent = data.tasks.find((t) => t.id === r.task);
+		if (parent) parent.touched = now;
 		if (parent && childrenOf(data, parent.id).every((c) => c.state === "settled")) markUnread(parent, "All subtasks are settled");
 	}
 }
 
 /**
- * Snoozes that ended, check-ins that came due and due dates that arrived since the last look. A due date arriving wakes
+ * Snoozes that ended, check-ins that came due, due dates that arrived, tasks that stalled and
+ * stall reminders since the last look, and stalled tasks touched again. A due date arriving wakes
  * a snoozed task early, as T3 Code wakes a thread that needs you. Returns whether anything changed.
  */
 export function tick(data: Data, now: number): boolean {
-	let changed = false;
+	let changed = resumeTouched(data, now).length > 0;
 	for (const task of data.tasks) {
 		if (task.archived || task.state === "settled") continue;
 		const due = task.due && task.dueAnnounced !== task.due && dueAt(task.due) <= now ? task.due : undefined;
@@ -411,6 +531,16 @@ export function tick(data: Data, now: number): boolean {
 			changed = true;
 		}
 		if (due) task.dueAnnounced = due;
+		const stalls = stallsAt(data, task);
+		const reminds = remindsAt(data, task);
+		if (stalls !== undefined && stalls <= now) {
+			transition(data, task.id, "stalled", { reason: stallReason(data, task, now) }, now);
+			changed = true;
+		} else if (reminds !== undefined && reminds <= now) {
+			markUnread(task, reminderReason(data, task, now));
+			task.remindedAt = now;
+			changed = true;
+		}
 	}
 	return changed;
 }
@@ -420,7 +550,13 @@ export function nextWake(data: Data, now: number): number | undefined {
 	let next: number | undefined;
 	for (const t of data.tasks) {
 		if (t.archived || t.state === "settled") continue;
-		const times = [t.state === "snoozed" ? t.snoozedUntil : undefined, t.state === "watching" ? t.watch?.next : undefined, t.due && t.dueAnnounced !== t.due ? dueAt(t.due) : undefined];
+		const times = [
+			t.state === "snoozed" ? t.snoozedUntil : undefined,
+			t.state === "watching" ? t.watch?.next : undefined,
+			t.due && t.dueAnnounced !== t.due ? dueAt(t.due) : undefined,
+			stallsAt(data, t),
+			remindsAt(data, t),
+		];
 		for (const at of times) if (at !== undefined && at > now && (next === undefined || at < next)) next = at;
 	}
 	return next;

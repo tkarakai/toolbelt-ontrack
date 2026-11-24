@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "ontrack",
   "name": "OnTrack",
-  "description": "Tasks you manage yourself: an Inbox, Working, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
+  "description": "Tasks you manage yourself: an Inbox, Working, Stalled, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
   "icon": "list-checks",
   "version": "0.13.2",
   "protocol": 1,
@@ -52,7 +52,7 @@
     ]
   },
   "data": {
-    "schema": 7
+    "schema": 8
   },
   "migration": {
     "entry": "migrate.js"
@@ -76,6 +76,7 @@
     "state-inbox": "assets/state-inbox.svg",
     "state-progressing": "assets/state-progressing.svg",
     "state-working": "assets/state-working.svg",
+    "state-stalled": "assets/state-stalled.svg",
     "state-snoozed": "assets/state-snoozed.svg",
     "state-watching": "assets/state-watching.svg",
     "state-settled": "assets/state-settled.svg"

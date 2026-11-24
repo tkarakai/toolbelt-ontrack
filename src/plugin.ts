@@ -1,7 +1,7 @@
 // Connects the SDK to the model: events change the data or the view, every data change is
 // saved immediately, and the open surfaces re-render. In active mode a timer wakes snoozed
-// tasks, brings watched tasks back for their check-ins and announces due dates; probe mode
-// starts no timers.
+// tasks, brings watched tasks back for their check-ins, announces due dates, stalls tasks left
+// untouched and reminds you of stalled ones; probe mode starts no timers.
 import { HUES, type Context, type Hue, type PluginDefinition, type TagValue } from "@toolbelt/sdk";
 import * as display from "./display";
 import * as life from "./lifecycle";
@@ -18,6 +18,9 @@ const MOVES: Record<string, model.TaskState> = {
 	wake: "inbox",
 	unwatch: "inbox",
 	reopen: "inbox",
+	unstall: "inbox",
+	stall: "stalled",
+	resume: "working",
 	snooze: "snoozed",
 	watch: "watching",
 	settle: "settled",
@@ -103,19 +106,25 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 
 	/** What a move offers to undo, by where the task went. */
 	const moved = (id: number, to: model.TaskState) =>
-		to === "working" ? `Working on #${id}` : to === "inbox" ? `#${id} back in the Inbox` : to === "settled" ? `Settled #${id}` : `Moved #${id}`;
+		to === "working" ? `Working on #${id}` : to === "inbox" ? `#${id} back in the Inbox` : to === "settled" ? `Settled #${id}` : to === "stalled" ? `#${id} is stalled` : `Moved #${id}`;
+
+	/** The update box for a stalled task's next step: saving it brings the task back to Working on. */
+	const nextStep = (task: model.Task) => ({ kind: "updates" as const, id: task.id, draft: "", resume: true });
 
 	/**
 	 * Moves a task to `to`, the way every entry point does (keys, drags, the drawer's Status, the
-	 * quick view): Snoozed and Watching open their dialog to pick the time; any other state is a
+	 * quick view): Snoozed and Watching open their dialog to pick the time, and a stalled task
+	 * going back to Working on opens the update box for its next step; any other state is a
 	 * `transition` now. Refused moves throw before anything opens. Returns whether data changed.
 	 */
 	function moveTo(task: model.Task, to: model.TaskState, c: Context, surface: string, before: Data, at: number | null = null): boolean {
 		const t = now();
 		const refused = to === task.state && (to === "snoozed" || to === "watching") ? undefined : life.refusal(task, to);
 		if (refused) throw new InvalidInput(refused);
-		if (to === "snoozed" || to === "watching") {
-			view.dialog = to === "snoozed" ? snoozeDialog(task, t) : watchDialog(task, t);
+		if (to === "stalled" && !data.stall.on) throw new InvalidInput("Stalling is off in Settings.");
+		const resume = to === "working" && task.state === "stalled";
+		if (to === "snoozed" || to === "watching" || resume) {
+			view.dialog = resume ? nextStep(task) : to === "snoozed" ? snoozeDialog(task, t) : watchDialog(task, t);
 			// From the quick view, the dialog opens in the main window, on the task.
 			if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
 				view.dialog = undefined;
@@ -309,6 +318,11 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 				const value = fieldValue(p?.value);
 				// The details drawer edits the task in place: each field saves on its own.
 				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, before);
+				// Settings' Stalling card: each setting saves on its own.
+				if (p?.form === "stall") {
+					model.setStall(data, { [String(p.field)]: value });
+					return true;
+				}
 				if (p?.form === "subtasks") {
 					if (model.SUBTASK_MODES.includes(value as model.SubtaskMode)) data.subtasks = value as model.SubtaskMode;
 					viewChanged = true;
@@ -349,6 +363,9 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			}
 			// ── the state machine: each move's action, through `moveTo` ──
 			case "work":
+			case "stall":
+			case "unstall":
+			case "resume":
 			case "done":
 			case "wake":
 			case "unwatch":
@@ -389,7 +406,11 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					model.addUpdate(data, rowId(), p.text, t);
 					return true;
 				}
-				view.dialog = { kind: "updates", id: model.findTask(data, rowId()).id, draft: "" };
+				{
+					// On a stalled task, the update is its next step.
+					const task = model.findTask(data, rowId());
+					view.dialog = task.state === "stalled" && !task.archived ? nextStep(task) : { kind: "updates", id: task.id, draft: "" };
+				}
 				return false;
 			case "edit-update-text": {
 				const { task, update } = updateRef();
@@ -515,7 +536,8 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					if (!e) {
 						model.addUpdate(data, dialog.id, dialog.draft, t);
 						// Stay for the next one: the composer comes back empty (a new field id) and focused.
-						view.dialog = { kind: "updates", id: dialog.id, draft: "" };
+						// A next step closes: the task is back to work.
+						view.dialog = dialog.resume ? undefined : { kind: "updates", id: dialog.id, draft: "" };
 						return true;
 					}
 					const was = model.findUpdate(model.findTask(data, dialog.id), e.update);
@@ -577,7 +599,12 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
 				viewChanged = false;
-				const changed = onEvent(surface, name, payload, c, before);
+				let changed = onEvent(surface, name, payload, c, before);
+				// A stalled task touched by this change (its next step written, or edited) is back to work.
+				for (const id of life.resumeTouched(data, now())) {
+					c.toast(`#${id} is back in Working on`, "success");
+					changed = true;
+				}
 				// Labels come and go; the filter row follows them.
 				data.filters = display.normalizeFilters(data);
 				// A later change withdraws the standing Undo, which would discard it.
