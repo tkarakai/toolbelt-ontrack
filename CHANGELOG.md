@@ -10,7 +10,7 @@
 - The Workflow filter's menu follows the list: the Inbox, Progressing's states under their own heading,, then Settled and Archived.
 - On upgrade, each task in Working on counts as last touched at its latest work session or update, so one untouched for 3 days or more stalls as soon as OnTrack starts. A Workflow filter that showed Working on shows Stalled too.
 - Data schema 8.
-- Needs the Toolbelt release that adds duration fields and filter sections (pinned once that SDK is published).
+- Requires Toolbelt 0.3.24 (SDK 0.3.18).
 
 ## 0.13.2 — 2026-11-24
 - The drawer's Parent, Children, Blocked by and Blocks lists drop the state icon before each task (its state pill already says it) and indent the tasks by its width instead (Toolbelt 0.3.23 and later).

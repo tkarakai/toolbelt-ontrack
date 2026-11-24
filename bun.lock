@@ -5,7 +5,7 @@
     "": {
       "name": "toolbelt-ontrack",
       "dependencies": {
-        "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.3.17/toolbelt-sdk-0.3.17.tgz",
+        "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.3.18/toolbelt-sdk-0.3.18.tgz",
       },
       "devDependencies": {
         "@types/bun": "1.4.4",
@@ -14,7 +14,7 @@
     },
   },
   "packages": {
-    "@toolbelt/sdk": ["@toolbelt/sdk@https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.3.17/toolbelt-sdk-0.3.17.tgz", { "bin": { "toolbelt-release": "./release/cli.js" } }, "sha512-jcSDQhalkXuj3QCMkNE0JD1vMXHFQxsu+qVpRkjnvX0jEvurbTCooajaFg3ex930ksZ7zqS3+3F0rLpfFS3RyA=="],
+    "@toolbelt/sdk": ["@toolbelt/sdk@https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.3.18/toolbelt-sdk-0.3.18.tgz", { "bin": { "toolbelt-release": "./release/cli.js" } }, "sha512-jG1RreeCISnj+ePhiscUdhRQ7oCvN7u6yVsZ722ISzHZQYOHAC9w3cwOkYkxlL4HTNndQnc9PMr0eKFeyCsUBw=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 

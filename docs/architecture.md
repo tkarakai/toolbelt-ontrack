@@ -35,10 +35,11 @@ Subtasks menu), `ui.context-select` (context rows act as their task), `ui.sectio
 groups as pills), `ui.row-dot` (the overdue dot), `ui.pane-buttons` (the drawer's buttons),
 `ui.tag-multiple` (the Related field), `ui.heading-note` (the id above the drawer's name),
 `ui.cell-prefix` (the id pill before a task's name), `ui.list-open` (the drawer's relation
-lists) and `ui.tag-open` (a Related pill's task is a link; on Toolbelt 0.3.22 and later its
-relation opens the picker). Optional `ui.list-inset` indents the relation lists, whose items
-have no icon. The package is portable JavaScript, uses SDK 0.3.17 and needs Toolbelt 0.3.20 or
-newer.
+lists), `ui.tag-open` (a Related pill's task is a link; on Toolbelt 0.3.22 and later its
+relation opens the picker) and `ui.duration-field` (the Stalling settings). Optional
+`ui.list-inset` indents the relation lists, whose items have no icon, and `ui.filter-sections`
+groups the Workflow filter's menu. The package is portable JavaScript, uses SDK 0.3.18 and needs
+Toolbelt 0.3.24 or newer (`requires.host`, and `HOST_VERSION` in `release.config.ts`).
 
 ### Subtasks
 
