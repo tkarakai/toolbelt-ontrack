@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.13.1 — 2026-11-24
 - On a Related pill, only the task (#12 Its name) is the link to it; the relation ("Blocks:") opens the picker to choose another task again (Toolbelt 0.3.22 and later).
 - Hovering a task in the drawer's Parent, Children, Blocked by or Blocks lists no longer closes the drawer (fixed in Toolbelt 0.3.22).
 - Uses SDK 0.3.16.
