@@ -12,16 +12,18 @@ security sandbox.
 OnTrack borrows the shape of T3 Code's thread list. You play the agent's part today; the model
 keeps room for a real agent later.
 
-- **Tasks** shows three sections. There is no Pinned section: to keep some tasks in view, give
-  them a yes/no label (say, *Pinned*) and filter by it. **Inbox** holds open
-  tasks in your order; new tasks and tasks that come back land at the top. **Progressing**
+- **Tasks** is grouped by Status to start with, in sections. There is no Pinned section: to keep
+  some tasks in view, give them a yes/no label (say, *Pinned*) and filter by it. **Inbox** holds
+  open tasks in your order; new tasks and tasks that come back land at the top. **Progressing**
   holds everything still in motion, in three sub-sections, one per state: **Working on it**, what
   you're doing now, in your order; **Snoozed**, hidden until its wake time, soonest first; and
   **Watching**, tasks out of your hands for now, next check-in first (see [Watching](#watching)).
   No task sits directly under Progressing; each sub-section shows even when it's empty and
-  collapses on its own. **Settled** (done) is a
-  collapsed shelf, newest first. **Archived** tasks leave the sections; switch to
-  *Archived* in the toolbar to see them, and *Ongoing* to come back. **New task** is N; once it's saved, the list lands on it.
+  collapses on its own. **Settled** (done) is a collapsed shelf, newest first. **Archived** tasks
+  are out of the way: include *Archived* in the Status filter and they show in a last, dimmed,
+  collapsed group, newest archived first. You can group and filter by Due and by any label too:
+  see [Filters and grouping](#filters-and-grouping). **New task** is N; once it's saved, the list
+  lands on it.
 - **Keys** follow the [state machine](#states-and-keys): P starts work or brings a task back to
   the Inbox; Z, W and S snooze, watch and settle. **A** archives and unarchives. **E** edits,
   **↵** or **⇧U** adds an update, **R** relates, **U** marks read/unread, **⌥↑/⌥↓** move (Inbox
@@ -30,19 +32,22 @@ keeps room for a real agent later.
   view) and every removal: archiving or deleting a task, deleting an update, removing a
   relation, deleting a label or relation type. Click it or press ⌘Z (in a text field ⌘Z still
   undoes your typing). It lasts as long as its toast (eight seconds) and
-  reverts only the latest change: a newer change, other than opening a task, withdraws it, so
-  Undo never discards work done since. Edits, new tasks and updates, read/unread, unarchiving
+  reverts only the latest change: a newer change, other than opening a task or changing the
+  filters, withdraws it, so Undo never discards work done since. Edits, new tasks and updates, read/unread, unarchiving
   and reordering don't offer it.
-- **Drag** tasks within the Inbox and Working on it to order them, or between sections. A drop
-  is the same move as its key and follows the same [state machine](#states-and-keys): into the
-  Inbox is P, onto Settled settles, into Snoozed or Watching opens the same dialog as Z or W, and
-  a move the keys don't allow (Snoozed straight to Working on it, say) is refused with a hint.
-  A drop lands in the sub-section it's in; a drop on the Progressing header itself starts work.
+- **Drag** tasks within the Inbox and Working on it to order them, or between groups. A drop
+  into a Status group is the same move as its key and follows the same
+  [state machine](#states-and-keys): into the Inbox is P, onto Settled settles, into Snoozed or
+  Watching opens the same dialog as Z or W, onto Archived archives (and out of it unarchives),
+  and a move the keys don't allow (Snoozed straight to Working on it, say) is refused with a
+  hint. A drop lands in the sub-section it's in; a drop on the Progressing header itself starts
+  work. A drop into a label's group sets that value (into its *No* group clears it), and into
+  Due's Today or No date sets or clears the due date; one Undo reverts the whole drop.
 - **Unread** tasks are bold with a blue dot and say why: back from Working on it, the snooze ended, a
   check-in came due (spelled out: who it's waiting on, for how long, the last check and how
   often), the due date arrived, a task blocking it was settled, or all its subtasks were settled. Keeping a
   task open for about two seconds marks it read. Nothing settles on its own.
-- Search matches names, descriptions, updates and label values; each label is a toolbar filter.
+- Search matches names, descriptions, updates and label values.
 - The **details drawer** is where you edit a task: see [Editing in the drawer](#editing-in-the-drawer).
 - **Settings** (⌘S) defines labels (with color swatches) and relation types; each table has its
   own New button above it.
@@ -53,6 +58,30 @@ keeps room for a real agent later.
   settle (S), snooze (Z) and, on a task back from a check-in, watch it again (W). Z and W open
   their dialog in the main window, on the task. Enter opens the task in the main window. The
   plugin badge counts open tasks that are unread or overdue.
+
+### Filters and grouping
+
+The toolbar has one filter per thing a task has: **Status**, **Due** and each label. Each one
+narrows the list to the values you check (**Show all** clears them; nothing checked means no
+filtering), and each can **group** the list by its values with the **Group by** switch at the top
+of its menu. Grouping filters come first in the row, numbered by level with › between them,
+then a divider and the rest; the list nests in that order. Drag a filter to reorder the levels,
+or across the divider to start or stop grouping by it (⌥← / ⌥→ on a focused filter does the
+same). Turning Group by on adds the filter as the last level; turning it off puts it first among
+the rest. Everything here is saved; the search isn't.
+
+- **Status** offers the five states and Archived. It starts on *Ongoing* (everything but
+  Archived), and **Reset to Ongoing** brings that back.
+- **Due** offers Overdue (open tasks past due), Today, Next 6 days, Later, Past (finished tasks
+  with an earlier date) and No date. Groups move on by themselves at midnight.
+- A **label** offers its values and *No <label>* (a yes/no label: Yes and No).
+
+Groups show only when they have tasks, except at the top of a Status grouping, where each state
+you show is there even when empty, as before. Settled and Archived start collapsed. Grouping
+goes 10 levels deep at most (Status counts two, for Progressing); a filter that would go deeper
+can't turn Group by on and says why. Tasks keep Status order inside every group (each state's
+own order, then Archived). Dragging to reorder Inbox and Working on it works when Status is the
+last level; elsewhere a drag moves a task between groups.
 
 ### Editing in the drawer
 

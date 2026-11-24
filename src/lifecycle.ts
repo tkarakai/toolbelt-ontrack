@@ -194,12 +194,13 @@ export function transition(data: Data, id: number, to: TaskState, opts: Transiti
 
 // ── flags and order ─────────────────────────────────────────────────────
 
-/** Archived is a flag, not a state: out of every section. A running work session stops. */
+/** Archived is a flag, not a state: the task keeps its state underneath. A running work session stops. */
 export function archive(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	endSession(task, now);
 	if (task.state === "working") task.state = "inbox";
 	task.archived = true;
+	task.archivedAt = now;
 	markRead(task);
 	touch(task, now);
 }
@@ -207,6 +208,7 @@ export function archive(data: Data, id: number, now: number) {
 export function unarchive(data: Data, id: number, now: number) {
 	const task = findTask(data, id);
 	task.archived = false;
+	delete task.archivedAt;
 	if (task.state === "inbox") toTop(data, "inbox", id);
 	touch(task, now);
 }
@@ -227,19 +229,6 @@ export function move(data: Data, id: number, by: -1 | 1, now: number) {
 	data.order[section] = [...ids, ...data.order[section].filter((x) => !ids.includes(x))];
 	touch(task, now);
 	return true;
-}
-
-/** The section holding Working on it, Snoozed and Watching; it has no tasks of its own. */
-export const PROGRESSING = "progressing";
-
-/**
- * The state a drop into table section `section` means. Working on it, Snoozed and Watching are
- * sub-sections reported by their own id; a drop on Progressing itself starts work.
- */
-export function dropSection(section: string): SectionId {
-	if (section === PROGRESSING) return "working";
-	if (!(STATES as readonly string[]).includes(section)) fail("Unknown section.");
-	return section as SectionId;
 }
 
 /**

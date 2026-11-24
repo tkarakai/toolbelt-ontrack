@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- **Group the list by what matters to you.** Every filter in the toolbar (Status, the new Due, and each label) can also group the list: flip **Group by** at the top of its menu. Grouping filters line up first, numbered by level with › between them; drag a filter (or press ⌥← ⌥→ on it) to change the order, or across the divider to start or stop grouping by it. Groups nest in that order, up to 10 levels: Project › Status gives each project its own Inbox, Progressing and Settled.
+- **Due** groups and filters by Overdue, Today, Next 6 days, Later, Past (finished tasks with an earlier date) and No date, moving on by itself at midnight.
+- **Drag between groups to change things.** A drop into a label's group sets that value (its *No* group clears it), into Today or No date sets or clears the due date, and into a Status group is that move, as before. One Undo reverts the whole drop.
+- **Archived is part of Status.** The Ongoing / Archived switch is gone: check Archived in the Status filter (or Show all) and archived tasks appear in a last, dimmed, collapsed group, newest archived first; archived tasks elsewhere carry an archive mark. Drag onto Archived to archive, out of it to unarchive. Status starts on Ongoing, and Reset to Ongoing brings that back.
+- Label filters offer *No <label>* for tasks without a value (Yes and No for yes/no labels), and every filter counts what the search and the other filters leave.
+- **Filters and grouping are saved**; the search still resets. Changing them no longer withdraws a standing Undo.
+- Requires Toolbelt 0.3.17 (SDK 0.3.12). Data schema 6.
 
 ## 0.8.0 — 2026-11-23
 - **Label values have colors of their own.** A text label can draw its values in its color or each in its own. A value's color is chosen when it's added (one the label uses least, never grey), stays through renames and moves, and can be changed from its dot. Colors show on pills, filters, details and in the task editor's value picker, and such a label shows a rainbow dot instead of a color of its own.
