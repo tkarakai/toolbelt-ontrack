@@ -49,14 +49,38 @@ test("the row follows the labels: gone ones leave, new ones come first among the
 	]);
 });
 
-test("arranging keeps every filter, puts grouping ones first and refuses more than ten levels", () => {
+test("views start from the stored row: its selections and arrangement", () => {
 	const data = fixture();
-	d.arrange(data, ["label:1", "status", "due"], ["label:1", "status"]);
-	expect(data.filters.map((f) => [f.id, f.group])).toEqual([["label:1", true], ["status", true], ["due", false], ["label:2", false], ["label:3", false], ["label:4", false]]);
-	// Status (2) + Due + four labels = 7 levels: fine. Ten more labels would pass the limit.
-	for (let i = 0; i < 6; i++) data.labels.push({ id: 10 + i, name: `L${i}`, type: "bool", color: "blue", values: [], freeform: false });
+	data.filters = d.normalizeFilters({ labels: data.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "status", group: true, selected: ["inbox"] }] });
+	expect(d.viewDeclaration(data)).toEqual({
+		search: true,
+		filters: { "label:3": ["High"], status: ["inbox"], due: [], "label:1": [], "label:2": [], "label:4": [] },
+		arrange: { order: ["label:3", "status", "due", "label:1", "label:2", "label:4"], grouped: ["label:3", "status"] },
+	});
+});
+
+test("a viewer's row: their arrangement and selections, repaired like the stored row, at most ten levels", () => {
+	const data = fixture();
+	// Nothing chosen: the stored row.
+	expect(d.filterRow(data, { filters: {}, arrange: null })).toEqual(data.filters);
+	// Grouping ones first; ids it doesn't know leave, ones it lacks (a newer label) follow, not grouping.
+	data.labels.push({ id: 5, name: "Area", type: "string", color: "blue", values: [], freeform: true });
 	data.filters = d.normalizeFilters(data);
-	expect(() => d.arrange(data, data.filters.map((f) => f.id), data.filters.map((f) => f.id))).toThrow("10 levels");
+	const row = d.filterRow(data, { filters: { "label:1": ["__none", "Taxes", "bogus"], status: [] }, arrange: { order: ["due", "label:1", "status", "label:9", "label:3", "label:4"], grouped: ["label:1", "status"] } });
+	expect(row.map((f) => [f.id, f.group, f.selected])).toEqual([
+		["label:1", true, ["__none", "Taxes"]],
+		["status", true, []],
+		["due", false, []],
+		["label:3", false, []],
+		["label:4", false, []],
+		["label:5", false, []],
+		["label:2", false, []],
+	]);
+	// Status (2) + Due + five labels = 8 levels; four more one-level filters stop grouping at ten.
+	for (let i = 0; i < 4; i++) data.labels.push({ id: 10 + i, name: `L${i}`, type: "bool", color: "blue", values: [], freeform: false });
+	data.filters = d.normalizeFilters(data);
+	const ids = data.filters.map((f) => f.id);
+	expect(d.groupedLevels(d.filterRow(data, { filters: {}, arrange: { order: ids, grouped: ids } }))).toBe(10);
 });
 
 test("due buckets: overdue only while open, today, the next six days, later, past and none", () => {
@@ -70,7 +94,7 @@ test("due buckets: overdue only while open, today, the next six days, later, pas
 
 test("Project › Status nests the groups, shows only groups with tasks, and names each by its path", () => {
 	const data = fixture();
-	d.arrange(data, ["label:1", "status"], ["label:1", "status"]);
+	data.filters = d.filterRow(data, { filters: {}, arrange: { order: ["label:1", "status"], grouped: ["label:1", "status"] } });
 	const { sections, groupOf } = d.groupTasks(data, tableOrder(data), NOW, LOOKS);
 	const shape = (list: any[]): any[] => list.map((s) => (s.sections ? [s.id, s.label, shape(s.sections)] : [s.id, s.label, s.order ?? "manual"]));
 	expect(shape(sections)).toEqual([
@@ -103,8 +127,7 @@ test("filters narrow by every selection; a label's No value matches tasks withou
 	const data = fixture();
 	const shown = () => tableOrder(data).filter((t) => d.passes(data, t, NOW)).map((t) => t.id);
 	expect(shown()).toEqual([3, 1, 2, 4]);
-	d.setSelection(data, "label:1", ["__none", "Taxes", "bogus"]);
-	expect(data.filters.find((f) => f.id === "label:1")!.selected).toEqual(["__none", "Taxes"]);
+	data.filters = d.filterRow(data, { filters: { "label:1": ["__none", "Taxes"] }, arrange: null });
 	expect(shown()).toEqual([3, 4]);
 	archive(data, 4, NOW);
 	expect(shown()).toEqual([3]);

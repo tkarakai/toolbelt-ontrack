@@ -173,7 +173,7 @@ export type Data = {
 	labels: Label[];
 	relationTypes: RelationType[];
 	order: Order;
-	/** The Tasks toolbar's filter row, in order: what each filter shows and which ones group. */
+	/** The stored filter row, in order (what each filter shows, which ones group): where views start. */
 	filters: FilterSetting[];
 	/** How subtasks show: not nested, nested in their own groups, or following their parent. */
 	subtasks: SubtaskMode;

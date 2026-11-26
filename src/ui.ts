@@ -2,7 +2,7 @@
 // state and clock it returns the same trees, which the tests rely on.
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, remindsAt, sectionOf, snoozeChoices, span, stallsAt, stallWarning, STATES, timeSpent, TRANSITIONS, untouched, WEEKLY, workingSince, type SectionId } from "./lifecycle";
-import { DUE, DUE_BUCKETS, PROGRESSING_STATES, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, type GroupLook, type Looks, type StatusValue } from "./display";
+import { DUE, DUE_BUCKETS, PROGRESSING_STATES, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, filterRow, type RowView, type GroupLook, type Looks, type StatusValue } from "./display";
 import { BUILT_IN_RELATIONS, MAX_STALL_MINUTES, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
@@ -106,11 +106,12 @@ export type UpdateDraft = { update: number; text: string; added: string; updated
 
 export const updateDraft = (u: Update, closeAfter?: boolean): UpdateDraft => ({ update: u.id, text: u.text, added: toLocalInput(u.added), updated: toLocalInput(u.updated), ...(closeAfter && { closeAfter }) });
 
-/** What lives only in memory: the search and an open dialog. Filters and grouping are saved with the data. */
-export type View = {
-	query: string;
-	dialog?: Dialog;
-};
+/**
+ * What a screen shows beyond the data: the viewer's search, filter selections and arrangement
+ * (Toolbelt keeps one view per viewer: every person's screen shares one, each agent has its own)
+ * and, on the person's screens only, the open dialog.
+ */
+export type View = RowView & { search: string; dialog?: Dialog };
 
 /**
  * The Watch dialog's fields as shown: who it waits on, a `repeat` choice (see `REPEATS`) and the
@@ -168,8 +169,6 @@ export function setRepeat(dialog: WatchDialog, repeat: string, now: number) {
 	dialog.repeat = repeat;
 	if (!dialog.nextSet) dialog.next = toLocalInput(defaultCheck(now, REPEATS.find((r) => r.id === repeat)?.every));
 }
-
-export const initialView = (): View => ({ query: "" });
 
 const NONE = "__none";
 
@@ -769,8 +768,10 @@ function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Fi
 	};
 }
 
-export function tasksScreen(data: Data, view: View, now: number): Node {
-	const s = search(view.query);
+export function tasksScreen(stored: Data, view: View, now: number): Node {
+	// The viewer's filter row stands in for the stored one.
+	const data: Data = { ...stored, filters: filterRow(stored, view) };
+	const s = search(view.search);
 	// The search narrows everything, the filters' counts included.
 	const pool = tableOrder(data).filter((t) => matches(data, t, s));
 	const shown = pool.filter((t) => passes(data, t, now));

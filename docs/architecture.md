@@ -7,8 +7,16 @@ rendering, plugin installation, the runtime process and managed-data recovery.
 
 Toolbelt launches the bundled `index.js` with Bun. The plugin uses the public `@toolbelt/sdk`
 package over JSON lines on stdin/stdout; stderr is diagnostic output. UI is a declarative tree;
-Toolbelt keeps selection, typing, scroll and drag feedback. Dialog drafts, search and the Undo
-snapshot live in plugin memory and reset on restart; the filter row is saved with the data.
+Toolbelt keeps selection, typing, scroll and drag feedback. The search, filter selections and
+filter arrangement are the SDK's view (protocol 2): one per open instance of a surface, saved by
+Toolbelt for the person (`views.json`), never by OnTrack. Dialog drafts and the Undo snapshot
+live in plugin memory and reset on restart.
+
+Every person's screen (window, popover, paired devices) shares the `PERSON` instance; AI agents
+read through `agent:…` instances of their own (`agent.access` is `read`). Only the person sends
+events, so the open dialog (`person.dialog` in `plugin.ts`) is theirs: `screenView` passes it to
+the person's instance only. Rendering is a pure function of the data and the instance's view;
+data, timers and polling stay per surface.
 
 The stable plugin id is `ontrack`. Screens are `tasks` (default, shortcut T) and `labels` (titled
 Settings, shortcut S; the id stays `labels`),
@@ -38,8 +46,9 @@ groups as pills), `ui.row-dot` (the overdue dot), `ui.pane-buttons` (the drawer'
 lists), `ui.tag-open` (a Related pill's task is a link; on Toolbelt 0.3.22 and later its
 relation opens the picker) and `ui.duration-field` (the Stalling settings). Optional
 `ui.list-inset` indents the relation lists, whose items have no icon, and `ui.filter-sections`
-groups the Workflow filter's menu. The package is portable JavaScript, uses SDK 0.3.18 and needs
-Toolbelt 0.3.24 or newer (`requires.host`, and `HOST_VERSION` in `release.config.ts`).
+groups the Workflow filter's menu. The package is portable JavaScript, uses SDK 0.4.0 (plugin
+protocol 2) and needs Toolbelt 0.6.0 or newer (`requires.host`, and `HOST_VERSION` in
+`release.config.ts`).
 
 ### Subtasks
 
@@ -56,17 +65,34 @@ offers Undo.
 
 ### Filters and grouping
 
-`data.filters` is the toolbar's filter row in order: `{id, group, selected}` for `status`, `due`
-and `label:<id>`, grouping ones first. `src/display.ts` (pure) owns it: `normalizeFilters` keeps
-it in step with the labels (run on load and after every event), `setSelection` and `arrange`
-apply `filter` and `filter-arrange` events, and `arrange` refuses more than `MAX_LEVELS` (10)
-levels, Status counting two for Progressing. `ui.ts` sends each filter with faceted counts (the
+The toolbar's filter row is `{id, group, selected}` for `status`, `due` and `label:<id>`, in
+order, grouping ones first. `src/display.ts` (pure) owns it. `data.filters` is the stored row:
+where views start. `normalizeFilters` keeps it in step with the labels (run on load and after
+every event), and nothing else writes it any more; it holds what each person had chosen before
+Toolbelt kept views (schema unchanged), so an upgrade starts from it.
+
+`viewDeclaration` declares the Tasks screen's view from the stored row: `search`, one filter per
+row entry with its stored selection, and `arrange` with its stored order and grouping. `views`
+in `plugin.ts` is that function of the data. It is read at the handshake, before `start`, so
+`loadOnce` loads the data file for whichever comes first. After every event `redeclare` sends the
+declarations again (`ctx.declareViews()`) when they changed: a label added, deleted or brought
+back by Undo, or a value removed from a stored selection. The SDK applies `search`, `filter` and
+`filter-arrange` events itself; they never reach `onEvent`. `onView` catches up with the clock
+and, for the person's Tasks view, cancels a pending mark-read when that task no longer shows.
+
+`filterRow` turns an instance's view into the row it renders: its arrangement (listed ids first,
+unknown ones dropped, ones it lacks after them, not grouping), repaired by `normalizeFilters`, which
+also stops grouping past `MAX_LEVELS` (10) levels with Status counting two for Progressing, and
+its selections limited to values that exist. `tasksScreen` uses that row in place of
+`data.filters`. The toolbar can't group past the limit (`groupDisabled`), and the SDK can't
+refuse a view, so a view asking for more (an agent's) is capped when rendered rather than
+refused. `ui.ts` sends each filter with faceted counts (the
 search and the other filters applied), `groupDisabled` once it couldn't fit, and Status's
 `default` (Ongoing: every state but archived). Filter values are Status values (the six states
 and `archived`), Due buckets (`overdue` open tasks past due, `today`, `next6`, `later`, `past`
 finished tasks, `none`; `dueBucket`) and label values, with `__none` for no value and `yes` for a
-yes/no label. Filter events save the data but don't withdraw a standing Undo, and Undo keeps the
-current filter row.
+yes/no label. View changes save nothing and don't withdraw a standing Undo; Undo restores data,
+not views, and keeps the Subtasks choice made since.
 
 `groupTasks` nests the shown tasks (`tableOrder`: each state's order, then archived newest
 first) by the grouping filters. A section's id is its path of segments joined by `/`: a Status
@@ -108,7 +134,8 @@ only Edit, and `parseData` adds back one that's missing. The drawer's `familyCar
 (Parent, Children, Blocked by, Blocks) as `list`s whose items are `rel:<id>` with the task's
 state, id, labels, due date and dots; their `open` (`open-task`) and `open-related` both select
 the task's row (or a context row standing for it) with `navigate`, or say it's hidden by the
-search or filters. New task's dialog state carries `start` (`NewTaskStart`: the Workflow
+search or filters. The row is looked up in the person's Tasks view as last rendered
+(`personTasks`), since `onEvent` gets the instance but not its view. New task's dialog state carries `start` (`NewTaskStart`: the Workflow
 state and Related values); saving adds the task, relates it, then moves it (Snoozed and Watching
 open their dialog on the new task).
 
@@ -203,10 +230,10 @@ The Workflow filter's Progressing options carry `section: "Progressing"`
 | `src/model.ts` | Types, seed data, validation, task/label/relation operations, schema upgrade. No I/O. |
 | `src/lifecycle.ts` | The state machine (`TRANSITIONS`, `transition`), sections, ordering, drag moves, unread rules and the clock (`tick`). No I/O. |
 | `src/store.ts` | Loads and atomically saves `ontrack.json` (temporary file, then rename). |
-| `src/display.ts` | The filter row: normalizing, selections and arrangement, where a task falls (status, due bucket, label value), the grouped sections and drop targets. No I/O. |
+| `src/display.ts` | The filter row: normalizing, the view declaration and a view's row, where a task falls (status, due bucket, label value), the grouped sections and drop targets. No I/O. |
 | `src/ui.ts` | Pure tree builders for both screens, dialogs and the quick view. |
 | `assets/` | The state icons (`state-*.svg`), declared under `assets` in the manifest and copied into the package by `scripts/build.ts`. Monochrome: they use `currentColor`, so Toolbelt tints them with the text color. |
-| `src/plugin.ts` | SDK lifecycle, event dispatch, Undo and the wake timer; saves after each change. |
+| `src/plugin.ts` | SDK lifecycle, view declarations, event dispatch, the person's dialog, Undo and the wake timer; saves after each change. |
 | `src/index.ts` | Production entry: binds the plugin to `dataDir()`. |
 | `src/migrate.ts` | Seeds a fresh install and upgrades schema 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. |
 | `scripts/` | Build, package and clean-archive verification. |
@@ -215,7 +242,7 @@ The Workflow filter's Progressing options carry `section: "Progressing"`
 
 Schema 8 is one JSON document: `nextTaskId`, `nextLabelId`, `nextUpdateId`, `tasks`, `labels`,
 `relationTypes`, `order` (`inbox`, `working`: task ids in the person's order), `filters` (the
-filter row, above), `subtasks` (how subtasks show) and `stall` (stalling settings, above). IDs
+stored filter row where views start, above), `subtasks` (how subtasks show) and `stall` (stalling settings, above). IDs
 are never reused. A task's `updates` are `{id, added, updated, text}` (epoch ms, Markdown) in
 the order written; they are shown newest first by `added`. Adding, editing or deleting one
 changes the task's `updated`.
