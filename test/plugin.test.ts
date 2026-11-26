@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import type { Node, PluginMessage } from "@toolbelt/sdk";
+import { PERSON, type Node, type PluginMessage } from "@toolbelt/sdk";
 import { fakeHost } from "@toolbelt/sdk/testing";
+import { normalizeFilters } from "../src/display";
 import { addTask, seed, type Data } from "../src/model";
 import { ontrack } from "../src/plugin";
 import { STATE_ICONS } from "../src/ui";
@@ -20,16 +21,16 @@ const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.ri
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
 	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => clock, readAfterMs: READ_MS }));
-	host.send({ type: "hello", protocol: 1, capabilities: CAPS, plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.9" } });
+	host.send({ type: "hello", protocol: 2, capabilities: CAPS, plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.9" } });
 	await until(() => host!.messages.some((m) => m.type === "ready"));
-	for (const surface of ["screen:tasks", "screen:labels", "quick"]) host.send({ type: "open", surface });
+	for (const surface of ["screen:tasks", "screen:labels", "quick"]) host.send({ type: "open", surface, instance: PERSON });
 	await until(() => !!tree("quick"));
 	return { saved, event: (name: string, payload?: unknown, surface = "screen:tasks") => send(surface, name, payload) };
 }
 
 async function send(surface: string, name: string, payload?: unknown) {
 	const count = host!.messages.length;
-	host!.send({ type: "event", surface, name, payload });
+	host!.send({ type: "event", surface, instance: PERSON, name, payload });
 	await until(() => host!.messages.length > count, 200).catch(() => {});
 }
 
@@ -42,10 +43,11 @@ async function until(check: () => boolean, ms = 2000) {
 }
 
 /** Selects a row the way Toolbelt does, without waiting for a reply (selecting renders nothing new). */
-const pick = (rowId: string) => host!.send({ type: "event", surface: "screen:tasks", name: "select", payload: { table: "tasks", rowId } });
+const pick = (rowId: string) => host!.send({ type: "event", surface: "screen:tasks", instance: PERSON, name: "select", payload: { table: "tasks", rowId } });
 
-const tree = (surface: string): any =>
-	(host!.messages.filter((m): m is Extract<PluginMessage, { type: "render" }> => m.type === "render" && m.surface === surface).at(-1) as any)?.tree as Node;
+/** The latest tree of a surface's instance (the person's unless named). */
+const tree = (surface: string, instance: string = PERSON): any =>
+	(host!.messages.filter((m): m is Extract<PluginMessage, { type: "render" }> => m.type === "render" && m.surface === surface && m.instance === instance).at(-1) as any)?.tree as Node;
 const table = () => tree("screen:tasks").children[0];
 const rows = () => table().rows as any[];
 /** The quick view's task list, under its New task line. */
@@ -740,19 +742,139 @@ test("removing a relation, a label or a relation type offers Undo", async () => 
 	expect(saved.at(-1)!.relationTypes).toHaveLength(types);
 });
 
-test("filters and grouping are saved, and choosing them leaves a standing Undo", async () => {
+/** The latest view declaration of the Tasks screen: from the handshake, or sent again since. */
+const declared = (): any => (host!.messages.filter((m: any) => m.type === "hello" || m.type === "views").at(-1) as any).views["screen:tasks"];
+
+test("filters, search and grouping are the person's view: the SDK applies them, the data file keeps none, Undo stands", async () => {
 	const { saved, event } = await start(fixture());
 	await event("settle", { rowId: "1" });
+	const writes = saved.length;
 	await event("filter-arrange", { order: ["label:1", "status", "due"], grouped: ["label:1", "status"] });
-	await event("filter", { filter: "label:3", values: ["High"] });
-	expect(saved.at(-1)!.filters.slice(0, 2).map((f) => [f.id, f.group])).toEqual([["label:1", true], ["status", true]]);
-	expect(saved.at(-1)!.filters.find((f) => f.id === "label:3")!.selected).toEqual(["High"]);
-	expect(tree("screen:tasks").filters.map((f: any) => [f.id, f.group])).toEqual([["label:1", true], ["status", true], ["due", false], ["label:2", false], ["label:3", false], ["label:4", false]]);
-	// Undo still reverts the settle, and keeps the new filters.
-	await event("filter", { filter: "label:3", values: [] });
+	await event("filter", { filter: "status", values: ["inbox"] });
+	await event("search", { query: "login" });
+	// Toolbelt hears of each change, to save the person's view; nothing is written to the data file.
+	expect(host!.messages.filter((m: any) => m.type === "view").at(-1)).toEqual({
+		type: "view",
+		surface: "screen:tasks",
+		instance: PERSON,
+		view: { search: "login", filters: { status: ["inbox"] }, arrange: { order: ["label:1", "status", "due"], grouped: ["label:1", "status"] } },
+	});
+	expect(saved.length).toBe(writes);
+	const page = tree("screen:tasks");
+	expect(page.search.query).toBe("login");
+	expect(page.filters.map((f: any) => [f.id, f.group, f.selected])).toEqual([
+		["label:1", true, []],
+		["status", true, ["inbox"]],
+		["due", false, []],
+		["label:2", false, []],
+		["label:3", false, []],
+		["label:4", false, []],
+	]);
+	expect(rows().map((r) => [r.id, r.group])).toEqual([["3", "l1=__none/inbox"]]);
+	// Undo still reverts the settle, and keeps the view.
 	await event("undo", undoPayload(), "toast");
-	expect(rows().find((r) => r.id === "1").actions).toContain("work");
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.state).toBe("inbox");
+	expect(saved.at(-1)!.filters).toEqual(fixture().filters);
 	expect(tree("screen:tasks").filters[0]).toMatchObject({ id: "label:1", group: true });
+	expect(tree("screen:tasks").search.query).toBe("login");
+});
+
+test("an agent's instance renders with a view of its own and leaves the person's alone", async () => {
+	const { event } = await start(fixture());
+	await event("archive", { rowId: "1" });
+	await event("new-task");
+	host!.send({ type: "open", surface: "screen:tasks", instance: "agent:a", view: { search: "spec", filters: { status: [] }, arrange: { order: ["status"], grouped: [] } } });
+	await until(() => !!tree("screen:tasks", "agent:a"));
+	const agent = () => tree("screen:tasks", "agent:a");
+	expect(agent().search.query).toBe("spec");
+	expect(agent().filters[0]).toMatchObject({ id: "status", group: false, selected: [] });
+	// Ungrouped and showing Archived too: the archived #1 says so.
+	expect(agent().children[0].sections).toBeUndefined();
+	expect(agent().children[0].rows.map((r: any) => [r.id, r.cells.name.tags[0]?.text])).toEqual([["1", "Archived"]]);
+	// The person's dialog stays on the person's screens.
+	expect(agent().dialog).toBeUndefined();
+	expect(tree("screen:tasks").dialog).toMatchObject({ id: "task" });
+	// The person's view is as it was: Ongoing, grouped by Workflow, no search.
+	expect(tree("screen:tasks").search.query).toBe("");
+	expect(rows().map((r) => [r.id, r.group])).toEqual([["3", "inbox"], ["2", "inbox"]]);
+	// Toolbelt sets the agent's view: it starts over from the declared defaults; the person's isn't touched.
+	host!.send({ type: "view", surface: "screen:tasks", instance: "agent:a", view: { search: "fix" } });
+	await until(() => agent().search.query === "fix");
+	expect(agent().children[0].rows.map((r: any) => [r.id, r.group])).toEqual([["3", "inbox"]]);
+	expect(host!.messages.some((m: any) => m.type === "view" && m.instance === PERSON)).toBe(false);
+	// A data change reaches both; the agent closing leaves the person's screen working.
+	await event("dialog-close", { dialog: "task" });
+	await event("work", { rowId: "3" });
+	expect(agent().children[0].rows.map((r: any) => [r.id, r.group])).toEqual([["3", "working"]]);
+	host!.send({ type: "close", surface: "screen:tasks", instance: "agent:a" });
+	await event("work", { rowId: "2" });
+	expect(bySection().working).toEqual(["Reply to Anna", "Fix login bug"]);
+});
+
+test("labels added, deleted or brought back by Undo send the view declarations again", async () => {
+	const { event } = await start(fixture());
+	expect(Object.keys(declared().filters)).toEqual(["status", "due", "label:1", "label:2", "label:3", "label:4"]);
+	const sent = () => host!.messages.filter((m: any) => m.type === "views").length;
+	await event("new-label", undefined, "screen:labels");
+	await event("field", { form: "label", field: "name", value: "Area" }, "screen:labels");
+	// A draft declares nothing.
+	expect(sent()).toBe(0);
+	await event("save", { dialog: "label" }, "screen:labels");
+	expect(sent()).toBe(1);
+	expect(declared().filters["label:5"]).toEqual([]);
+	expect(declared().arrange.order).toEqual(["status", "label:5", "due", "label:1", "label:2", "label:3", "label:4"]);
+	// The person can filter by it right away.
+	await event("filter", { filter: "label:5", values: ["__none"] });
+	expect(tree("screen:tasks").filters.find((f: any) => f.id === "label:5").selected).toEqual(["__none"]);
+	// Renaming changes no declaration; deleting takes the filter away.
+	await event("edit-label", { rowId: "l5" }, "screen:labels");
+	await event("field", { form: "label", field: "name", value: "Areas" }, "screen:labels");
+	await event("save", { dialog: "label" }, "screen:labels");
+	expect(sent()).toBe(1);
+	expect(tree("screen:tasks").filters.find((f: any) => f.id === "label:5").label).toBe("Areas");
+	await event("delete-label", { rowId: "l5" }, "screen:labels");
+	expect(sent()).toBe(2);
+	expect(declared().filters["label:5"]).toBeUndefined();
+	expect(tree("screen:tasks").filters.some((f: any) => f.id === "label:5")).toBe(false);
+	await event("undo", undoPayload(), "toast");
+	expect(sent()).toBe(3);
+	expect(declared().filters["label:5"]).toEqual([]);
+	expect(tree("screen:tasks").filters.find((f: any) => f.id === "label:5").selected).toEqual([]);
+});
+
+test("upgrading keeps the filters and grouping a person had: views start from them", async () => {
+	const d = fixture();
+	d.tasks[0]!.labels[3] = "High";
+	d.filters = normalizeFilters({ labels: d.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "status", group: true, selected: ["inbox"] }] });
+	const { saved, event } = await start(d);
+	expect(declared()).toMatchObject({ search: true, filters: { "label:3": ["High"], status: ["inbox"], due: [] }, arrange: { grouped: ["label:3", "status"] } });
+	expect(tree("screen:tasks").filters.slice(0, 2).map((f: any) => [f.id, f.group, f.selected])).toEqual([
+		["label:3", true, ["High"]],
+		["status", true, ["inbox"]],
+	]);
+	expect(rows().map((r) => [r.id, r.group])).toEqual([["1", "l3=High/inbox"]]);
+	// Changes are the person's view now: the stored row stays where views start.
+	await event("filter", { filter: "label:3", values: [] });
+	await event("filter-arrange", { order: ["status", "label:3"], grouped: ["status"] });
+	await event("work", { rowId: "2" });
+	expect(saved.at(-1)!.filters).toEqual(d.filters);
+	expect(declared().filters["label:3"]).toEqual(["High"]);
+	expect(rows().map((r) => r.id)).toEqual(["3", "1"]);
+});
+
+test("a task the person searches or filters away before it reads stays unread", async () => {
+	const { event } = await start(fixture());
+	await event("work", { rowId: "2" });
+	await event("done", { rowId: "2" });
+	pick("2");
+	await event("search", { query: "login" });
+	await Bun.sleep(READ_MS * 2);
+	await event("search", { query: "" });
+	expect(rows().find((r) => r.id === "2").unread).toBe(true);
+	// Still shown, it reads.
+	pick("2");
+	await event("filter", { filter: "due", values: ["none"] });
+	await until(() => !rows().find((r) => r.id === "2").unread);
 });
 
 test("Workflow offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
@@ -917,8 +1039,9 @@ test("without grouping the list is flat and a filter that would nest past ten le
 	// Status (2) and eight one-level filters fill the ten levels; the rest can't group.
 	await event("filter-arrange", { order: ids, grouped: ids.slice(0, 9) });
 	expect(tree("screen:tasks").filters.filter((f: any) => f.groupDisabled).map((f: any) => f.groupDisabled)).toEqual(Array(ids.length - 9).fill("Grouping goes 10 levels deep at most"));
+	// The toolbar refuses more; a view that asks for it anyway (an agent's) groups ten levels deep.
 	await event("filter-arrange", { order: ids, grouped: ids });
-	expect(toasts().at(-1)).toMatchObject({ text: "Grouping goes 10 levels deep at most.", tone: "error" });
+	expect(tree("screen:tasks").filters.filter((f: any) => f.group).map((f: any) => f.id)).toEqual(ids.slice(0, 9));
 });
 
 /** #1 is the parent of #2 and #3; #3 is being worked on. */

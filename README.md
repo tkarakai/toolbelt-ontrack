@@ -77,7 +77,9 @@ of its menu. Grouping filters come first in the row, numbered by level with › 
 then a divider and the rest; the list nests in that order. Drag a filter to reorder the levels,
 or across the divider to start or stop grouping by it (⌥← / ⌥→ on a focused filter does the
 same). Turning Group by on adds the filter as the last level; turning it off puts it first among
-the rest. Everything here is saved; the search isn't.
+the rest. Toolbelt keeps the search, filters and grouping for you: they're the same in the main
+window, the menu bar and on your other devices, and they come back the next time you open OnTrack.
+Upgrading from OnTrack 0.14 or earlier keeps the filters and grouping you had.
 
 - **Workflow** offers the six states and Archived, the way the list groups them: the Inbox, then
   Progressing's four states under that heading, then Settled and Archived. It starts on *Ongoing* (everything but
@@ -85,6 +87,9 @@ the rest. Everything here is saved; the search isn't.
 - **Due** offers Overdue (open tasks past due), Today, Next 6 days, Later, Past (finished tasks
   with an earlier date) and No date. Groups move on by themselves at midnight.
 - A **label** offers its values and *No <label>* (a yes/no label: Yes and No).
+
+AI agents connected to Toolbelt can read your tasks, each with search, filters and grouping of its
+own: what an agent looks at never changes what you see. They can't change tasks.
 
 Groups show only when they have tasks, except at the top of a Workflow grouping, where each state
 you show is there even when empty, as before. Settled and Archived start collapsed. Grouping
@@ -100,7 +105,7 @@ grouping (or the task, following its parent, is in a different state from its gr
 ### Subtasks
 
 A task's **Parent** relation makes it a subtask. The **Subtasks** menu, after the filters, picks
-how they show (saved, like the filters):
+how they show (saved with your tasks, so agents see your choice too):
 
 - **Off**: every task on a row of its own.
 - **Stay in their own group**: subtasks nest under their parent within their own group. A

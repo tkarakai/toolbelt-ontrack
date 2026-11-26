@@ -1,7 +1,8 @@
 // How the Tasks list is filtered and grouped. One row of filters (Status, Due and one per label)
 // both narrows the list and, for the filters whose Group by is on, nests it into groups in the
-// row's order. Pure: no I/O, no SDK runtime; the settings live in the data file.
-import type { Section } from "@toolbelt/sdk";
+// row's order. Pure: no I/O, no SDK runtime. Toolbelt keeps each viewer's selections and
+// arrangement (its view); the row stored in the data file is where views start.
+import type { Section, ViewDeclaration } from "@toolbelt/sdk";
 import { dueAt, parentOf, type Data, type Label, type SubtaskMode, type Task, type TaskState } from "./model";
 
 /** One filter of the row: which values it shows (none: all) and whether it groups. */
@@ -90,28 +91,44 @@ export function normalizeFilters(data: Pick<Data, "labels"> & { filters?: Filter
 	});
 }
 
-/** A new selection for one filter (values it doesn't have are dropped). */
-export function setSelection(data: Data, id: string, values: unknown) {
-	const allowed = new Set(filterValues(data, id));
-	const f = data.filters.find((x) => x.id === id);
-	if (!f) return;
-	f.selected = Array.isArray(values) ? [...new Set(values.map(String).filter((v) => allowed.has(v)))] : [];
+// ── the view ────────────────────────────────────────────────────────────
+
+/** What a viewer chose: filter selections and the row's arrangement (Toolbelt's view, per viewer). */
+export type RowView = { filters: Readonly<Record<string, string[]>>; arrange: { order: string[]; grouped: string[] } | null };
+
+/**
+ * The Tasks screen's view declaration: the search, one filter per row entry and the row's
+ * arrangement. The starting selections and arrangement are the row stored in the data file,
+ * which is what each person had chosen before Toolbelt kept views, so nothing changes for them.
+ */
+export function viewDeclaration(data: Pick<Data, "filters">): ViewDeclaration {
+	return {
+		search: true,
+		filters: Object.fromEntries(data.filters.map((f) => [f.id, [...f.selected]])),
+		arrange: { order: data.filters.map((f) => f.id), grouped: data.filters.filter((f) => f.group).map((f) => f.id) },
+	};
 }
 
 /**
- * A new arrangement from the toolbar: every filter in `order`, the `grouped` ones grouping in
- * that order. Unknown ids are ignored and missing ones keep their place after the rest; grouping
- * beyond `MAX_LEVELS` is refused.
+ * The filter row a viewer sees: the arrangement they chose (else the stored row), repaired
+ * against the labels like `normalizeFilters`: grouping ones lead in level order, ids it doesn't
+ * know leave, filters it lacks (a label added since) follow the rest in stored order, not
+ * grouping, and grouping is cut off at `MAX_LEVELS`. Selections are the viewer's (else the
+ * stored ones), limited to values that exist.
  */
-export function arrange(data: Data, order: unknown, grouped: unknown) {
-	const ids = Array.isArray(order) ? order.map(String) : [];
-	const on = new Set(Array.isArray(grouped) ? grouped.map(String) : []);
-	const byId = new Map(data.filters.map((f) => [f.id, f]));
-	const listed = ids.filter((id, i) => byId.has(id) && ids.indexOf(id) === i);
-	const next = [...listed, ...data.filters.map((f) => f.id).filter((id) => !listed.includes(id))].map((id) => ({ ...byId.get(id)!, group: on.has(id) }));
-	if (groupedLevels(next) > MAX_LEVELS) throw new RangeError(`Grouping goes ${MAX_LEVELS} levels deep at most.`);
-	// Grouping filters lead, in level order.
-	data.filters = [...next.filter((f) => f.group), ...next.filter((f) => !f.group)];
+export function filterRow(data: Pick<Data, "labels" | "filters">, view: RowView): FilterSetting[] {
+	const a = view.arrange;
+	let arranged = data.filters;
+	if (a) {
+		const listed = a.order.map((id) => ({ id, group: a.grouped.includes(id), selected: [] as string[] }));
+		const missing = data.filters.filter((f) => !a.order.includes(f.id)).map((f) => ({ ...f, group: false }));
+		arranged = [...listed, ...missing];
+	}
+	return normalizeFilters({ labels: data.labels, filters: arranged }).map((f) => {
+		const chosen = view.filters[f.id] ?? data.filters.find((x) => x.id === f.id)?.selected ?? f.selected;
+		const values = new Set(filterValues(data, f.id));
+		return { ...f, selected: [...new Set(chosen.filter((v) => values.has(v)))] };
+	});
 }
 
 // ── where a task falls ──────────────────────────────────────────────────

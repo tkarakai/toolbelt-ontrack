@@ -1,6 +1,7 @@
 // Runs the built archive the way Toolbelt does: extracted into a temporary folder with no source
 // checkout or node_modules, a fresh data directory initialized by the packaged migration, every
-// surface opened, a task created through events, then a clean prepare and shutdown.
+// surface opened for the person, a task created through their events, then a clean prepare and
+// shutdown.
 import { $ } from "bun";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ try {
 
 	const proc = Bun.spawn([process.execPath, join(pkg, "index.js")], { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 10000 });
 	const send = (msg: unknown) => proc.stdin.write(JSON.stringify(msg) + "\n");
-	send({ type: "hello", protocol: 1, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.3.9" } });
+	send({ type: "hello", protocol: 2, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.6.0" } });
 	const surfaces = [...m.screens.map((s) => `screen:${s.id}`), "quick"];
 	const rendered = new Set<string>();
 	let buffer = "";
@@ -38,16 +39,18 @@ try {
 			buffer = buffer.slice(at + 1);
 			if (!line) continue;
 			const msg = JSON.parse(line);
+			// The Tasks screen declares its view (search, filters and their arrangement) in the handshake.
+			if (msg.type === "hello" && !(msg.views?.["screen:tasks"]?.search && msg.views["screen:tasks"].arrange)) throw Error("Expected the Tasks view declaration");
 			if (msg.type === "ready" && step === "ready") {
 				step = "render";
-				for (const surface of surfaces) send({ type: "open", surface });
+				for (const surface of surfaces) send({ type: "open", surface, instance: "person" });
 			}
 			if (msg.type === "render") rendered.add(msg.surface);
 			if (step === "render" && rendered.size === surfaces.length) {
 				step = "create";
-				send({ type: "event", surface: "screen:tasks", name: "new-task" });
-				send({ type: "event", surface: "screen:tasks", name: "field", payload: { form: "task", field: "name", value: "Packaged task" } });
-				send({ type: "event", surface: "screen:tasks", name: "save", payload: { dialog: "task" } });
+				send({ type: "event", surface: "screen:tasks", instance: "person", name: "new-task" });
+				send({ type: "event", surface: "screen:tasks", instance: "person", name: "field", payload: { form: "task", field: "name", value: "Packaged task" } });
+				send({ type: "event", surface: "screen:tasks", instance: "person", name: "save", payload: { dialog: "task" } });
 				send({ type: "prepare", requestId: "verify", reason: "upgrade" });
 			}
 			if (msg.type === "prepared") {
