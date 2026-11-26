@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.15.0 — 2026-11-26
 - The search, filters and grouping are now the same everywhere you see OnTrack: the main window, the menu bar and your other devices. Toolbelt saves them and brings them back when you open OnTrack. Upgrading keeps the filters and grouping you had.
 - AI agents connected to Toolbelt can read your tasks, each with its own search, filters and grouping, without changing what you see. They can't change tasks.
 - A task you search or filter away before it has been selected long enough to count as read stays unread.
