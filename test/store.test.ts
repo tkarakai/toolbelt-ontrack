@@ -80,7 +80,7 @@ test("migration seeds once and keeps existing data", async () => {
 		writeFileSync(join(dir, FILE), JSON.stringify({ ...five, schema: 5, tasks: [{ ...five.tasks[0], archived: true, updated: 42 }] }));
 		expect((await migrate(5)).map((m) => m.text).filter(Boolean)).toEqual(["Filters and grouping are now saved", "Subtasks can now nest under their parent", "Tasks you're working on now stall when left untouched"]);
 		expect(load(dir).tasks[0]).toMatchObject({ archived: true, archivedAt: 42 });
-		expect(load(dir).filters.slice(0, 2)).toEqual([{ id: "status", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"] }, { id: "due", group: false, selected: [] }]);
+		expect(load(dir).filters.slice(0, 2)).toEqual([{ id: "workflow-state", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"] }, { id: "due", group: false, selected: [] }]);
 		expect(load(dir).subtasks).toBe("off");
 		// Schema 7 data: stalling starts on, and a task you're working on was last touched at its latest work.
 		const { stall: _st, ...seven } = load(dir);
@@ -88,7 +88,7 @@ test("migration seeds once and keeps existing data", async () => {
 		writeFileSync(join(dir, FILE), JSON.stringify({ ...seven, schema: 7, tasks: [working], filters: [{ id: "status", group: true, selected: ["inbox", "working"] }] }));
 		expect((await migrate(7)).map((m) => m.text).filter(Boolean)).toEqual(["Tasks you're working on now stall when left untouched"]);
 		expect(load(dir)).toMatchObject({ schema: 8, stall: { on: true, after: 4320, warnAfter: 2880, remindEvery: 1440, weekends: true }, tasks: [{ state: "working", touched: 300 }] });
-		expect(load(dir).filters[0]).toEqual({ id: "status", group: true, selected: ["inbox", "working", "stalled"] });
+		expect(load(dir).filters[0]).toEqual({ id: "workflow-state", group: true, selected: ["inbox", "working", "stalled"] });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

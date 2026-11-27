@@ -195,7 +195,7 @@ test("Undo restores what settle, archive and delete changed, but only briefly", 
 	await event("archive", { rowId: "3" });
 	expect(rows().some((r) => r.id === "3")).toBe(false);
 	// Archived is a Status value: shown, it's the last group, collapsed and dimmed.
-	await event("filter", { filter: "status", values: [] });
+	await event("filter", { filter: "workflow-state", values: [] });
 	expect(table().sections.at(-1)).toMatchObject({ id: "archived", label: "Archived", collapsed: true, muted: true });
 	expect(rows().filter((r) => groupOf(r) === "archived").map((r) => [r.id, r.actions])).toEqual([["3", ["unarchive", "edit", "add-update", "delete"]]]);
 	await event("unarchive", { rowId: "3" });
@@ -749,22 +749,22 @@ test("filters, search and grouping are the person's view: the SDK applies them, 
 	const { saved, event } = await start(fixture());
 	await event("settle", { rowId: "1" });
 	const writes = saved.length;
-	await event("filter-arrange", { order: ["label:1", "status", "due"], grouped: ["label:1", "status"] });
-	await event("filter", { filter: "status", values: ["inbox"] });
+	await event("filter-arrange", { order: ["label:1", "workflow-state", "due"], grouped: ["label:1", "workflow-state"] });
+	await event("filter", { filter: "workflow-state", values: ["inbox"] });
 	await event("search", { query: "login" });
 	// Toolbelt hears of each change, to save the person's view; nothing is written to the data file.
 	expect(host!.messages.filter((m: any) => m.type === "view").at(-1)).toEqual({
 		type: "view",
 		surface: "screen:tasks",
 		instance: PERSON,
-		view: { search: "login", filters: { status: ["inbox"] }, arrange: { order: ["label:1", "status", "due"], grouped: ["label:1", "status"] } },
+		view: { search: "login", filters: { "workflow-state": ["inbox"] }, arrange: { order: ["label:1", "workflow-state", "due"], grouped: ["label:1", "workflow-state"] } },
 	});
 	expect(saved.length).toBe(writes);
 	const page = tree("screen:tasks");
 	expect(page.search.query).toBe("login");
 	expect(page.filters.map((f: any) => [f.id, f.group, f.selected])).toEqual([
 		["label:1", true, []],
-		["status", true, ["inbox"]],
+		["workflow-state", true, ["inbox"]],
 		["due", false, []],
 		["label:2", false, []],
 		["label:3", false, []],
@@ -783,11 +783,11 @@ test("an agent's instance renders with a view of its own and leaves the person's
 	const { event } = await start(fixture());
 	await event("archive", { rowId: "1" });
 	await event("new-task");
-	host!.send({ type: "open", surface: "screen:tasks", instance: "agent:a", view: { search: "spec", filters: { status: [] }, arrange: { order: ["status"], grouped: [] } } });
+	host!.send({ type: "open", surface: "screen:tasks", instance: "agent:a", view: { search: "spec", filters: { "workflow-state": [] }, arrange: { order: ["workflow-state"], grouped: [] } } });
 	await until(() => !!tree("screen:tasks", "agent:a"));
 	const agent = () => tree("screen:tasks", "agent:a");
 	expect(agent().search.query).toBe("spec");
-	expect(agent().filters[0]).toMatchObject({ id: "status", group: false, selected: [] });
+	expect(agent().filters[0]).toMatchObject({ id: "workflow-state", group: false, selected: [] });
 	// Ungrouped and showing Archived too: the archived #1 says so.
 	expect(agent().children[0].sections).toBeUndefined();
 	expect(agent().children[0].rows.map((r: any) => [r.id, r.cells.name.tags[0]?.text])).toEqual([["1", "Archived"]]);
@@ -813,7 +813,7 @@ test("an agent's instance renders with a view of its own and leaves the person's
 
 test("labels added, deleted or brought back by Undo send the view declarations again", async () => {
 	const { event } = await start(fixture());
-	expect(Object.keys(declared().filters)).toEqual(["status", "due", "label:1", "label:2", "label:3", "label:4"]);
+	expect(Object.keys(declared().filters)).toEqual(["workflow-state", "due", "label:1", "label:2", "label:3", "label:4"]);
 	const sent = () => host!.messages.filter((m: any) => m.type === "views").length;
 	await event("new-label", undefined, "screen:labels");
 	await event("field", { form: "label", field: "name", value: "Area" }, "screen:labels");
@@ -822,7 +822,7 @@ test("labels added, deleted or brought back by Undo send the view declarations a
 	await event("save", { dialog: "label" }, "screen:labels");
 	expect(sent()).toBe(1);
 	expect(declared().filters["label:5"]).toEqual([]);
-	expect(declared().arrange.order).toEqual(["status", "label:5", "due", "label:1", "label:2", "label:3", "label:4"]);
+	expect(declared().arrange.order).toEqual(["workflow-state", "label:5", "due", "label:1", "label:2", "label:3", "label:4"]);
 	// The person can filter by it right away.
 	await event("filter", { filter: "label:5", values: ["__none"] });
 	expect(tree("screen:tasks").filters.find((f: any) => f.id === "label:5").selected).toEqual(["__none"]);
@@ -845,17 +845,17 @@ test("labels added, deleted or brought back by Undo send the view declarations a
 test("upgrading keeps the filters and grouping a person had: views start from them", async () => {
 	const d = fixture();
 	d.tasks[0]!.labels[3] = "High";
-	d.filters = normalizeFilters({ labels: d.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "status", group: true, selected: ["inbox"] }] });
+	d.filters = normalizeFilters({ labels: d.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "workflow-state", group: true, selected: ["inbox"] }] });
 	const { saved, event } = await start(d);
-	expect(declared()).toMatchObject({ search: true, filters: { "label:3": ["High"], status: ["inbox"], due: [] }, arrange: { grouped: ["label:3", "status"] } });
+	expect(declared()).toMatchObject({ search: true, filters: { "label:3": ["High"], "workflow-state": ["inbox"], due: [] }, arrange: { grouped: ["label:3", "workflow-state"] } });
 	expect(tree("screen:tasks").filters.slice(0, 2).map((f: any) => [f.id, f.group, f.selected])).toEqual([
 		["label:3", true, ["High"]],
-		["status", true, ["inbox"]],
+		["workflow-state", true, ["inbox"]],
 	]);
 	expect(rows().map((r) => [r.id, r.group])).toEqual([["1", "l3=High/inbox"]]);
 	// Changes are the person's view now: the stored row stays where views start.
 	await event("filter", { filter: "label:3", values: [] });
-	await event("filter-arrange", { order: ["status", "label:3"], grouped: ["status"] });
+	await event("filter-arrange", { order: ["workflow-state", "label:3"], grouped: ["workflow-state"] });
 	await event("work", { rowId: "2" });
 	expect(saved.at(-1)!.filters).toEqual(d.filters);
 	expect(declared().filters["label:3"]).toEqual(["High"]);
@@ -880,7 +880,7 @@ test("a task the person searches or filters away before it reads stays unread", 
 test("Workflow offers Archived and resets to Ongoing; Due and labels offer their buckets and No value", async () => {
 	await start(fixture());
 	const [status, due, project, personal] = tree("screen:tasks").filters;
-	expect(status).toMatchObject({ id: "status", label: "Workflow", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
+	expect(status).toMatchObject({ id: "workflow-state", label: "Workflow", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"], default: { label: "Ongoing" } });
 	expect(status.options.map((o: any) => [o.label, o.count])).toEqual([["Inbox", 3], ["Working on", 0], ["Stalled", 0], ["Snoozed", 0], ["Watching", 0], ["Settled", 0], ["Archived", 0]]);
 	expect(due.options.map((o: any) => o.label)).toEqual(["Overdue", "Today", "Next 6 days", "Later", "Past", "No date"]);
 	expect(project.options.at(-1)).toMatchObject({ value: "__none", label: "No Project", count: 3 });
@@ -889,7 +889,7 @@ test("Workflow offers Archived and resets to Ongoing; Due and labels offer their
 
 test("a drag into a label's group sets the value, into Status groups moves too, and one Undo reverts both", async () => {
 	const { event } = await start(fixture());
-	await event("filter-arrange", { order: ["label:3", "status"], grouped: ["label:3", "status"] });
+	await event("filter-arrange", { order: ["label:3", "workflow-state"], grouped: ["label:3", "workflow-state"] });
 	// Only tasks' groups show; drag #1 from No Priority › Inbox into High › Working on.
 	await event("reorder", { table: "tasks", rowId: "1", section: "l3=High/working", before: null });
 	const row = () => rows().find((r) => r.id === "1");
@@ -901,9 +901,9 @@ test("a drag into a label's group sets the value, into Status groups moves too, 
 	expect(row().group).toBe("l3=__none/inbox");
 	expect(row().cells.name.tags).toEqual([]);
 	// Grouped by Priority alone, each row says its state, as a pill before its labels.
-	await event("filter-arrange", { order: ["label:3", "status"], grouped: ["label:3"] });
+	await event("filter-arrange", { order: ["label:3", "workflow-state"], grouped: ["label:3"] });
 	expect(row().cells.name.tags).toEqual([{ text: "Inbox", icon: STATE_ICONS.inbox }]);
-	await event("filter-arrange", { order: ["status", "label:3"], grouped: ["status"] });
+	await event("filter-arrange", { order: ["workflow-state", "label:3"], grouped: ["workflow-state"] });
 	await event("reorder", { table: "tasks", rowId: "1", section: "inbox", before: null });
 	expect(row().cells.name.tags).toEqual([]);
 });
@@ -999,7 +999,7 @@ test("a label's groups show its values as pills; the drawer ends with buttons", 
 
 test("without Workflow grouping every row says its state; an archived one says Archived instead of a mark", async () => {
 	const { event } = await start(fixture());
-	await event("filter", { filter: "status", values: [] });
+	await event("filter", { filter: "workflow-state", values: [] });
 	await event("filter-arrange", { order: [], grouped: [] });
 	const row = (id: string) => rows().find((r) => r.id === id);
 	expect(row("1").cells.name.tags[0]).toEqual({ text: "Inbox", icon: STATE_ICONS.inbox });
@@ -1010,7 +1010,7 @@ test("without Workflow grouping every row says its state; an archived one says A
 
 test("a drag into Today sets the due date; into Later it's refused with a hint", async () => {
 	const { event } = await start(fixture());
-	await event("filter-arrange", { order: ["due", "status"], grouped: ["due"] });
+	await event("filter-arrange", { order: ["due", "workflow-state"], grouped: ["due"] });
 	await event("reorder", { table: "tasks", rowId: "2", section: "d=today", before: null });
 	expect(rows().find((r) => r.id === "2").group).toBe("d=today");
 	await event("reorder", { table: "tasks", rowId: "2", section: "d=later", before: null });
@@ -1020,7 +1020,7 @@ test("a drag into Today sets the due date; into Later it's refused with a hint",
 
 test("a drag onto Archived archives; out of it into a state unarchives and moves", async () => {
 	const { event } = await start(fixture());
-	await event("filter", { filter: "status", values: [] });
+	await event("filter", { filter: "workflow-state", values: [] });
 	await event("reorder", { table: "tasks", rowId: "3", section: "archived", before: null });
 	expect(rows().find((r) => r.id === "3").group).toBe("archived");
 	expect(toasts().at(-1)).toMatchObject({ text: "Archived #3" });

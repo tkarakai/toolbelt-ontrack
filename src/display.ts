@@ -11,7 +11,10 @@ export type FilterSetting = { id: string; group: boolean; selected: string[] };
 /** How deep grouping may nest, counting Progressing's own level (Toolbelt's `MAX_SECTION_DEPTH`). */
 export const MAX_LEVELS = 10;
 
-export const STATUS = "status";
+/** The Workflow filter. Before 0.16.0 its id was `status`: saved rows and arrangements using it still work. */
+export const STATUS = "workflow-state";
+const LEGACY_STATUS = "status";
+const current = (id: string) => (id === LEGACY_STATUS ? STATUS : id);
 export const DUE = "due";
 export const labelFilterId = (label: Pick<Label, "id">) => `label:${label.id}`;
 
@@ -72,7 +75,8 @@ export function normalizeFilters(data: Pick<Data, "labels"> & { filters?: Filter
 	const ids = new Set(known.map((f) => f.id));
 	const seen = new Set<string>();
 	const kept: FilterSetting[] = [];
-	for (const f of Array.isArray(data.filters) ? data.filters : []) {
+	for (const saved of Array.isArray(data.filters) ? data.filters : []) {
+		const f = saved && typeof saved.id === "string" ? { ...saved, id: current(saved.id) } : saved;
 		if (!f || typeof f.id !== "string" || !ids.has(f.id) || seen.has(f.id)) continue;
 		seen.add(f.id);
 		const values = new Set(filterValues(data, f.id));
@@ -117,7 +121,7 @@ export function viewDeclaration(data: Pick<Data, "filters">): ViewDeclaration {
  * stored ones), limited to values that exist.
  */
 export function filterRow(data: Pick<Data, "labels" | "filters">, view: RowView): FilterSetting[] {
-	const a = view.arrange;
+	const a = view.arrange && { order: view.arrange.order.map(current), grouped: view.arrange.grouped.map(current) };
 	let arranged = data.filters;
 	if (a) {
 		const listed = a.order.map((id) => ({ id, group: a.grouped.includes(id), selected: [] as string[] }));
@@ -125,7 +129,7 @@ export function filterRow(data: Pick<Data, "labels" | "filters">, view: RowView)
 		arranged = [...listed, ...missing];
 	}
 	return normalizeFilters({ labels: data.labels, filters: arranged }).map((f) => {
-		const chosen = view.filters[f.id] ?? data.filters.find((x) => x.id === f.id)?.selected ?? f.selected;
+		const chosen = view.filters[f.id] ?? (f.id === STATUS ? view.filters[LEGACY_STATUS] : undefined) ?? data.filters.find((x) => x.id === f.id)?.selected ?? f.selected;
 		const values = new Set(filterValues(data, f.id));
 		return { ...f, selected: [...new Set(chosen.filter((v) => values.has(v)))] };
 	});

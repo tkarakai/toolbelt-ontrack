@@ -25,7 +25,7 @@ function fixture(): Data {
 
 test("a fresh row groups by Status showing Ongoing; Due and each label follow", () => {
 	expect(seed().filters).toEqual([
-		{ id: "status", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"] },
+		{ id: "workflow-state", group: true, selected: ["inbox", "working", "stalled", "snoozed", "watching", "settled"] },
 		{ id: "due", group: false, selected: [] },
 		{ id: "label:1", group: false, selected: [] },
 		{ id: "label:2", group: false, selected: [] },
@@ -36,11 +36,11 @@ test("a fresh row groups by Status showing Ongoing; Due and each label follow", 
 
 test("the row follows the labels: gone ones leave, new ones come first among the rest, lost values drop", () => {
 	const data = fixture();
-	data.filters = [{ id: "label:3", group: true, selected: ["High", "Gone"] }, { id: "status", group: true, selected: [] }, { id: "label:9", group: false, selected: [] }, { id: "label:1", group: false, selected: [] }];
+	data.filters = [{ id: "label:3", group: true, selected: ["High", "Gone"] }, { id: "workflow-state", group: true, selected: [] }, { id: "label:9", group: false, selected: [] }, { id: "label:1", group: false, selected: [] }];
 	data.labels.push({ id: 5, name: "Area", type: "string", color: "blue", values: [], freeform: true });
 	expect(d.normalizeFilters(data).map((f) => [f.id, f.group, f.selected])).toEqual([
 		["label:3", true, ["High"]],
-		["status", true, []],
+		["workflow-state", true, []],
 		["due", false, []],
 		["label:2", false, []],
 		["label:4", false, []],
@@ -51,11 +51,11 @@ test("the row follows the labels: gone ones leave, new ones come first among the
 
 test("views start from the stored row: its selections and arrangement", () => {
 	const data = fixture();
-	data.filters = d.normalizeFilters({ labels: data.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "status", group: true, selected: ["inbox"] }] });
+	data.filters = d.normalizeFilters({ labels: data.labels, filters: [{ id: "label:3", group: true, selected: ["High"] }, { id: "workflow-state", group: true, selected: ["inbox"] }] });
 	expect(d.viewDeclaration(data)).toEqual({
 		search: true,
-		filters: { "label:3": ["High"], status: ["inbox"], due: [], "label:1": [], "label:2": [], "label:4": [] },
-		arrange: { order: ["label:3", "status", "due", "label:1", "label:2", "label:4"], grouped: ["label:3", "status"] },
+		filters: { "label:3": ["High"], "workflow-state": ["inbox"], due: [], "label:1": [], "label:2": [], "label:4": [] },
+		arrange: { order: ["label:3", "workflow-state", "due", "label:1", "label:2", "label:4"], grouped: ["label:3", "workflow-state"] },
 	});
 });
 
@@ -66,10 +66,10 @@ test("a viewer's row: their arrangement and selections, repaired like the stored
 	// Grouping ones first; ids it doesn't know leave, ones it lacks (a newer label) follow, not grouping.
 	data.labels.push({ id: 5, name: "Area", type: "string", color: "blue", values: [], freeform: true });
 	data.filters = d.normalizeFilters(data);
-	const row = d.filterRow(data, { filters: { "label:1": ["__none", "Taxes", "bogus"], status: [] }, arrange: { order: ["due", "label:1", "status", "label:9", "label:3", "label:4"], grouped: ["label:1", "status"] } });
+	const row = d.filterRow(data, { filters: { "label:1": ["__none", "Taxes", "bogus"], "workflow-state": [] }, arrange: { order: ["due", "label:1", "workflow-state", "label:9", "label:3", "label:4"], grouped: ["label:1", "workflow-state"] } });
 	expect(row.map((f) => [f.id, f.group, f.selected])).toEqual([
 		["label:1", true, ["__none", "Taxes"]],
-		["status", true, []],
+		["workflow-state", true, []],
 		["due", false, []],
 		["label:3", false, []],
 		["label:4", false, []],
@@ -94,7 +94,7 @@ test("due buckets: overdue only while open, today, the next six days, later, pas
 
 test("Project › Status nests the groups, shows only groups with tasks, and names each by its path", () => {
 	const data = fixture();
-	data.filters = d.filterRow(data, { filters: {}, arrange: { order: ["label:1", "status"], grouped: ["label:1", "status"] } });
+	data.filters = d.filterRow(data, { filters: {}, arrange: { order: ["label:1", "workflow-state"], grouped: ["label:1", "workflow-state"] } });
 	const { sections, groupOf } = d.groupTasks(data, tableOrder(data), NOW, LOOKS);
 	const shape = (list: any[]): any[] => list.map((s) => (s.sections ? [s.id, s.label, shape(s.sections)] : [s.id, s.label, s.order ?? "manual"]));
 	expect(shape(sections)).toEqual([
@@ -134,9 +134,9 @@ test("filters narrow by every selection; a label's No value matches tasks withou
 });
 
 test("a drop names every value along its section's path", () => {
-	expect([...d.dropTarget("l1=Web%2Fsite/progressing")]).toEqual([["label:1", "Web/site"], ["status", "working"]]);
-	expect([...d.dropTarget("d=today/l3=High/snoozed")]).toEqual([["due", "today"], ["label:3", "High"], ["status", "snoozed"]]);
-	expect([...d.dropTarget("archived")]).toEqual([["status", "archived"]]);
+	expect([...d.dropTarget("l1=Web%2Fsite/progressing")]).toEqual([["label:1", "Web/site"], ["workflow-state", "working"]]);
+	expect([...d.dropTarget("d=today/l3=High/snoozed")]).toEqual([["due", "today"], ["label:3", "High"], ["workflow-state", "snoozed"]]);
+	expect([...d.dropTarget("archived")]).toEqual([["workflow-state", "archived"]]);
 	expect(d.dropTarget("").size).toBe(0);
 });
 
@@ -151,4 +151,20 @@ test("a group's forest nests tasks under parents, with parents elsewhere as cont
 	expect(d.rootOf(data, data.tasks.find((t) => t.id === 3)!).id).toBe(1);
 	expect([...d.placement(data, data.tasks, "parent")].map(([id, root]) => [id, root.id])).toEqual([[2, 1], [3, 1]]);
 	expect(d.placement(data, data.tasks, "own").size).toBe(0);
+});
+
+test("the Workflow filter's old id (status) still works in saved rows and viewers' views", () => {
+	const data = fixture();
+	// A stored row from before the rename keeps its selection and grouping.
+	data.filters = d.normalizeFilters({ labels: data.labels, filters: [{ id: "label:1", group: true, selected: [] }, { id: "status", group: true, selected: ["inbox"] }] });
+	expect(data.filters.slice(0, 2)).toEqual([
+		{ id: "label:1", group: true, selected: [] },
+		{ id: "workflow-state", group: true, selected: ["inbox"] },
+	]);
+	// A viewer's arrangement and selection saved with the old id keep grouping by Workflow.
+	const row = d.filterRow(data, { filters: { status: ["working"] }, arrange: { order: ["status", "label:1", "due"], grouped: ["status"] } });
+	expect(row.slice(0, 2).map((f) => [f.id, f.group, f.selected])).toEqual([
+		["workflow-state", true, ["working"]],
+		["label:1", false, []],
+	]);
 });

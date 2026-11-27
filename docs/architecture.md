@@ -65,11 +65,14 @@ offers Undo.
 
 ### Filters and grouping
 
-The toolbar's filter row is `{id, group, selected}` for `status`, `due` and `label:<id>`, in
+The toolbar's filter row is `{id, group, selected}` for `workflow-state` (the Workflow filter), `due` and `label:<id>`, in
 order, grouping ones first. `src/display.ts` (pure) owns it. `data.filters` is the stored row:
 where views start. `normalizeFilters` keeps it in step with the labels (run on load and after
 every event), and nothing else writes it any more; it holds what each person had chosen before
 Toolbelt kept views (schema unchanged), so an upgrade starts from it.
+The Workflow filter's id is `workflow-state`; until 0.16.0 it was `status`, which
+`normalizeFilters` and `filterRow` still read as `workflow-state` in stored rows and in views
+Toolbelt saved, so selections and grouping survive the rename.
 
 `viewDeclaration` declares the Tasks screen's view from the stored row: `search`, one filter per
 row entry with its stored selection, and `arrange` with its stored order and grouping. `views`
