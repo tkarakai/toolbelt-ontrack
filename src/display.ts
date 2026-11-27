@@ -11,7 +11,7 @@ export type FilterSetting = { id: string; group: boolean; selected: string[] };
 /** How deep grouping may nest, counting Progressing's own level (Toolbelt's `MAX_SECTION_DEPTH`). */
 export const MAX_LEVELS = 10;
 
-/** The Workflow filter. Before 0.16.0 its id was `status`: saved rows and arrangements using it still work. */
+/** The Workflow filter. Versions up to 0.15.0 called it `status`: saved rows and arrangements using it still work. */
 export const STATUS = "workflow-state";
 const LEGACY_STATUS = "status";
 const current = (id: string) => (id === LEGACY_STATUS ? STATUS : id);
