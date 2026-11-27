@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- AI agents see the Workflow filter as `workflow-state` instead of `status`, so it can't be confused with a label named Status. Your saved filters and grouping carry over.
 
 ## 0.15.0 — 2026-11-26
 - The search, filters and grouping are now the same everywhere you see OnTrack: the main window, the menu bar and your other devices. Toolbelt saves them and brings them back when you open OnTrack. Upgrading keeps the filters and grouping you had.
