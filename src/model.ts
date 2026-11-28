@@ -368,6 +368,32 @@ export function updateLabel(data: Data, id: number, input: LabelInput, now: numb
 	return label;
 }
 
+/**
+ * What saving a label edit would take off tasks: how many tasks lose their value, and which
+ * values (a value removed from the list, a rename onto a value that then leaves, or every value
+ * when a text label becomes yes/no). Nothing when the edit would be refused anyway.
+ */
+export function labelLosses(data: Data, id: number, input: LabelInput): { tasks: number; values: string[] } {
+	const label = data.labels.find((l) => l.id === id);
+	if (!label) return { tasks: 0, values: [] };
+	const after = structuredClone(data);
+	try {
+		updateLabel(after, id, input, 0, () => 0);
+	} catch (e) {
+		if (e instanceof InvalidInput) return { tasks: 0, values: [] };
+		throw e;
+	}
+	const values = new Set<string>();
+	let tasks = 0;
+	data.tasks.forEach((task, i) => {
+		const was = task.labels[id];
+		if (was === undefined || after.tasks[i]!.labels[id] !== undefined) return;
+		tasks++;
+		values.add(was === true ? label.name : String(was));
+	});
+	return { tasks, values: [...values] };
+}
+
 /** How many tasks carry each of a label's values (all tasks, archived too). */
 export function valueCounts(data: Data, label: Label): Map<string, number> {
 	const counts = new Map<string, number>();

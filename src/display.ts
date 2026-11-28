@@ -3,7 +3,7 @@
 // row's order. Pure: no I/O, no SDK runtime. Toolbelt keeps each viewer's selections and
 // arrangement (its view); the row stored in the data file is where views start.
 import type { Section, ViewDeclaration } from "@toolbelt/sdk";
-import { dueAt, parentOf, type Data, type Label, type SubtaskMode, type Task, type TaskState } from "./model";
+import { dueAt, parentOf, SUBTASK_MODES, type Data, type Label, type SubtaskMode, type Task, type TaskState } from "./model";
 
 /** One filter of the row: which values it shows (none: all) and whether it groups. */
 export type FilterSetting = { id: string; group: boolean; selected: string[] };
@@ -101,16 +101,32 @@ export function normalizeFilters(data: Pick<Data, "labels"> & { filters?: Filter
 export type RowView = { filters: Readonly<Record<string, string[]>>; arrange: { order: string[]; grouped: string[] } | null };
 
 /**
- * The Tasks screen's view declaration: the search, one filter per row entry and the row's
- * arrangement. The starting selections and arrangement are the row stored in the data file,
- * which is what each person had chosen before Toolbelt kept views, so nothing changes for them.
+ * The Tasks screen's view declaration: the search, one filter per row entry, the row's
+ * arrangement and the Subtasks control, with the values each filter and the control may take.
+ * The starting selections, arrangement and Subtasks choice are the ones stored in the data
+ * file, which is what each person had chosen before Toolbelt kept views, so nothing changes for
+ * them.
  */
-export function viewDeclaration(data: Pick<Data, "filters">): ViewDeclaration {
+export function viewDeclaration(data: Pick<Data, "filters" | "labels" | "subtasks">): ViewDeclaration {
 	return {
 		search: true,
 		filters: Object.fromEntries(data.filters.map((f) => [f.id, [...f.selected]])),
 		arrange: { order: data.filters.map((f) => f.id), grouped: data.filters.filter((f) => f.group).map((f) => f.id) },
+		controls: { subtasks: data.subtasks },
+		options: {
+			filters: Object.fromEntries(data.filters.map((f) => [f.id, filterValues(data, f.id)])),
+			controls: { subtasks: [...SUBTASK_MODES] },
+		},
 	};
+}
+
+/**
+ * How many levels a view's arrangement asks to group by (Status counting two), before
+ * `normalizeFilters` cuts it off at `MAX_LEVELS`: a view asking for more is refused.
+ */
+export function requestedLevels(data: Pick<Data, "labels">, view: RowView): number {
+	const known = new Set(defaultFilters(data).map((f) => f.id));
+	return [...new Set((view.arrange?.grouped ?? []).map(current))].filter((id) => known.has(id)).reduce((n, id) => n + levelsOf(id), 0);
 }
 
 /**
@@ -119,14 +135,20 @@ export function viewDeclaration(data: Pick<Data, "filters">): ViewDeclaration {
  * know leave, filters it lacks (a label added since) follow the rest in stored order, not
  * grouping, and grouping is cut off at `MAX_LEVELS`. Selections are the viewer's (else the
  * stored ones), limited to values that exist.
+ *
+ * The Workflow filter is always in an arrangement Toolbelt saved, except one saved while its id
+ * was `status` (up to 0.15.0), from which the SDK has since dropped the id it no longer
+ * declares. Such an arrangement gets the Workflow filter back where the stored row has it:
+ * first and grouping, unless the person had changed that before views existed.
  */
 export function filterRow(data: Pick<Data, "labels" | "filters">, view: RowView): FilterSetting[] {
 	const a = view.arrange && { order: view.arrange.order.map(current), grouped: view.arrange.grouped.map(current) };
 	let arranged = data.filters;
 	if (a) {
 		const listed = a.order.map((id) => ({ id, group: a.grouped.includes(id), selected: [] as string[] }));
-		const missing = data.filters.filter((f) => !a.order.includes(f.id)).map((f) => ({ ...f, group: false }));
-		arranged = [...listed, ...missing];
+		const missing = data.filters.filter((f) => !a.order.includes(f.id));
+		const workflow = missing.filter((f) => f.id === STATUS && f.group);
+		arranged = [...workflow, ...listed, ...missing.filter((f) => !workflow.includes(f)).map((f) => ({ ...f, group: false }))];
 	}
 	return normalizeFilters({ labels: data.labels, filters: arranged }).map((f) => {
 		const chosen = view.filters[f.id] ?? (f.id === STATUS ? view.filters[LEGACY_STATUS] : undefined) ?? data.filters.find((x) => x.id === f.id)?.selected ?? f.selected;

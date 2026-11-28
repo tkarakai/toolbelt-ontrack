@@ -5,14 +5,14 @@
   "description": "Tasks you manage yourself: an Inbox, Working, Stalled, Watching, Snoozed and Settled, with colored labels, due dates and related tasks.",
   "icon": "list-checks",
   "version": "0.15.0",
-  "protocol": 2,
+  "protocol": 3,
   "agent": {
-    "access": "read"
+    "access": "act"
   },
   "entry": "index.js",
   "repo": "tkarakai/toolbelt-ontrack",
   "requires": {
-    "host": ">=0.6.0",
+    "host": ">=0.10.0",
     "bun": ">=1.3.0",
     "platforms": [
       "portable"

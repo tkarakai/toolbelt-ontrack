@@ -3,7 +3,7 @@
 import { asset, HUES, search, type Action, type Cell, type Dialog as DialogNode, type Field, type Filter, type Hue, type Node, type OptionItem, type Row, type Tag, type TagKey, type TagValue } from "@toolbelt/sdk";
 import { cadenceLabel, defaultCheck, duration, inSection, nextOnSchedule, remindsAt, sectionOf, snoozeChoices, span, stallsAt, stallWarning, STATES, timeSpent, TRANSITIONS, untouched, WEEKLY, workingSince, type SectionId } from "./lifecycle";
 import { DUE, DUE_BUCKETS, PROGRESSING_STATES, dropTarget, filterValues, forest, groupedLevels, groupTasks, placement, statusOf, type TreeNode, levelsOf, MAX_LEVELS, NO_VALUE, ONGOING, passes, STATUS, STATUS_LABELS, valueOf, YES, type FilterSetting, filterRow, type RowView, type GroupLook, type Looks, type StatusValue } from "./display";
-import { BUILT_IN_RELATIONS, MAX_STALL_MINUTES, colorOf, dueAt, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
+import { BUILT_IN_RELATIONS, MAX_STALL_MINUTES, colorOf, dueAt, labelLosses, isBuiltInRelation, nextValueColor, parentOf, type SeenRelation, type SubtaskMode, relationsOf, shadeOf, toLocalInput, updatesOf, valueCounts, type Cadence, type Data, type Label, type LabelInput, type LabelType, type Task, type TaskInput, type Update, type Watch } from "./model";
 
 export type Dialog =
 	| { kind: "task"; id?: number; draft: TaskInput; start?: NewTaskStart; error?: string }
@@ -80,16 +80,21 @@ export function labelDraft(label?: Label): LabelDraft {
 
 /**
  * The values list editor's new state applied to the draft: known keys keep where they came
- * from; items without one are new and get a key, and a color when the editor gave none.
+ * from. An item without a key (an agent sends the list as texts) is the draft's value with that
+ * text, when no item claims it by key; otherwise it's new and gets a key, and a color when none
+ * was given.
  */
 export function applyValues(draft: LabelDraft, items: unknown, random?: () => number): void {
 	if (!Array.isArray(items)) return;
 	const known = new Map(draft.values.map((v) => [v.key, v]));
+	const claimed = new Set((items as OptionItem[]).map((i) => i?.key).filter((k) => k !== undefined));
+	const byText = new Map(draft.values.filter((v) => !claimed.has(v.key)).map((v) => [v.text, v]));
 	let n = Math.max(0, ...draft.values.map((v) => (v.key.startsWith("n:") ? Number(v.key.slice(2)) : 0)));
 	const values: ValueDraft[] = [];
 	for (const item of items as OptionItem[]) {
 		if (typeof item?.text !== "string") continue;
-		const was = item.key === undefined ? undefined : known.get(item.key);
+		const was = item.key === undefined ? byText.get(item.text) : known.get(item.key);
+		if (item.key === undefined) byText.delete(item.text);
 		const color = (HUES as readonly unknown[]).includes(item.color) ? item.color! : (was?.color ?? nextValueColor(values, random));
 		values.push({ key: was?.key ?? `n:${++n}`, text: item.text, color, ...(was?.from !== undefined && { from: was.from }) });
 	}
@@ -107,11 +112,11 @@ export type UpdateDraft = { update: number; text: string; added: string; updated
 export const updateDraft = (u: Update, closeAfter?: boolean): UpdateDraft => ({ update: u.id, text: u.text, added: toLocalInput(u.added), updated: toLocalInput(u.updated), ...(closeAfter && { closeAfter }) });
 
 /**
- * What a screen shows beyond the data: the viewer's search, filter selections and arrangement
- * (Toolbelt keeps one view per viewer: every person's screen shares one, each agent has its own)
- * and, on the person's screens only, the open dialog.
+ * What a screen shows beyond the data: the viewer's search, filter selections, arrangement and
+ * Subtasks choice (Toolbelt keeps one view per viewer: every person's screen shares one, each
+ * agent has its own) and the dialog open in that viewer's instance.
  */
-export type View = RowView & { search: string; dialog?: Dialog };
+export type View = RowView & { search: string; subtasks?: SubtaskMode; dialog?: Dialog };
 
 /**
  * The Watch dialog's fields as shown: who it waits on, a `repeat` choice (see `REPEATS`) and the
@@ -284,6 +289,8 @@ export function taskActions(now: number): Action[] {
 		{ id: "resume", label: "Write the next step", icon: "footprints", inline: true, group: "flow", focus: "update" },
 		{ id: "stall", label: "Mark stalled", icon: "hourglass", key: "shift+p", group: "flow" },
 		{ id: "settle", label: "Settle", icon: "check", key: "s", group: "flow" },
+		// S again on a settled task: done and not done are one key.
+		{ id: "unsettle", label: "Not done", icon: "rotate-ccw", key: "s", group: "flow" },
 		{
 			id: "snooze",
 			label: "Snooze…",
@@ -329,6 +336,7 @@ export function actionsFor(task: Task, stallOn = true): string[] {
 	if (task.archived) return ["unarchive", "edit", "add-update", "delete"];
 	const section = sectionOf(task);
 	const ids = TRANSITIONS[task.state].filter((to) => to !== "stalled" || stallOn).map((to) => actionFor(task, to));
+	if (task.state === "settled") ids.push("unsettle");
 	ids.push("edit", "add-update", "relate");
 	if (task.state !== "settled") ids.push(task.unread ? "mark-read" : "mark-unread");
 	if (section === "inbox" || section === "working") ids.push("up", "down");
@@ -769,8 +777,8 @@ function filterNode(data: Data, f: FilterSetting, pool: Task[], now: number): Fi
 }
 
 export function tasksScreen(stored: Data, view: View, now: number): Node {
-	// The viewer's filter row stands in for the stored one.
-	const data: Data = { ...stored, filters: filterRow(stored, view) };
+	// The viewer's filter row and Subtasks choice stand in for the stored ones.
+	const data: Data = { ...stored, filters: filterRow(stored, view), subtasks: view.subtasks ?? stored.subtasks };
 	const s = search(view.search);
 	// The search narrows everything, the filters' counts included.
 	const pool = tableOrder(data).filter((t) => matches(data, t, s));
@@ -1015,8 +1023,9 @@ function dialogNode(data: Data, dialog: Dialog, now: number): DialogNode {
 				children: [
 					...error(dialog.error),
 					{
+						// Not `task`: that's the drawer's form, which saves as it changes.
 						type: "form",
-						id: "task",
+						id: "task-draft",
 						fields: [
 							{ type: "text", id: "name", label: "Name", value: d.name, placeholder: "What needs doing" },
 							...(start
@@ -1324,10 +1333,15 @@ function labelDialog(data: Data, dialog: Extract<Dialog, { kind: "label" }>): Di
 	const counts = label ? valueCounts(data, label) : new Map<string, number>();
 	const text = d.type === "string";
 	const color: Field = { type: "color", id: "color", label: text ? "Label color" : "Color", value: d.color };
+	// Saving an edit that takes values off tasks asks first (and still offers Undo).
+	const lost = label ? labelLosses(data, label.id, labelInput(d)) : { tasks: 0, values: [] };
+	const confirm = lost.tasks
+		? `${lost.tasks === 1 ? "1 task loses its" : `${lost.tasks} tasks lose their`} ${label!.name} value (${lost.values.slice(0, 5).join(", ")}${lost.values.length > 5 ? ", …" : ""}). Save anyway?`
+		: undefined;
 	return {
 		id: "label",
 		title: label ? `Edit ${label.name}` : "New label",
-		actions: [save],
+		actions: [{ ...save, ...(confirm && { confirm }) }],
 		children: [
 			...error(dialog.error),
 			{

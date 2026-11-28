@@ -1,7 +1,13 @@
 # Changelog
 
 ## Unreleased
+- **AI agents can now work with your tasks when you allow it** (Settings → Agents, *Read and act*): create tasks through New task, relate, snooze and watch them through their dialogs, move them through the workflow, settle them, write updates and edit labels. ToolBelt asks you before each change, showing what it will do, unless you let that agent make changes for a while; deleting, and a label edit that takes values off tasks, always ask. An agent's dialogs are its own, so your open drafts stay yours, and its changes offer you Undo like your own. An agent that creates a task learns its number.
+- A task an agent opens or looks at stays unread for you.
+- **S toggles done**: on a settled task, S (Not done) brings it back to the Inbox.
+- Saving a label edit that takes values off tasks asks first, naming how many tasks lose which values. Undo still works after.
+- The Subtasks choice is now part of your view, like the filters: ToolBelt keeps it for you, and agents choose their own. Your current choice carries over.
 - AI agents see the Workflow filter as `workflow-state` instead of `status`, so it can't be confused with a label named Status. Your saved filters and grouping carry over.
+- Requires ToolBelt 0.10.0 (SDK 0.7.0, plugin protocol 3).
 
 ## 0.15.0 — 2026-11-26
 - The search, filters and grouping are now the same everywhere you see OnTrack: the main window, the menu bar and your other devices. Toolbelt saves them and brings them back when you open OnTrack. Upgrading keeps the filters and grouping you had.

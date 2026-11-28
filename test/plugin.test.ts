@@ -12,8 +12,14 @@ const START = new Date(2026, 10, 14, 12, 0).getTime();
 let clock = START;
 let host: ReturnType<typeof fakeHost> | undefined;
 afterEach(() => {
+	// Every screen rendered in a test used only declared actions and forms, and every message passed the host's checks.
+	const rejected = host?.rejected ?? [];
+	const invalid = host?.invalid ?? [];
 	host?.close();
+	host = undefined;
 	clock = START;
+	expect(rejected).toEqual([]);
+	expect(invalid).toEqual([]);
 });
 
 const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.rich-fields", "ui.row-select", "ui.row-reorder", "ui.modifier-keys", "ui.timeline", "ui.row-pane", "ui.composer", "navigate"];
@@ -21,18 +27,18 @@ const CAPS = ["ui.core", "ui.action-key", "lifecycle", "ui.split-action", "ui.ri
 async function start(initial: Data = seed()) {
 	const saved: Data[] = [];
 	host = fakeHost(ontrack({ load: () => structuredClone(initial), save: (d) => saved.push(structuredClone(d)), now: () => clock, readAfterMs: READ_MS }));
-	host.send({ type: "hello", protocol: 2, capabilities: CAPS, plugin: { id: "ontrack" }, host: { name: "test", version: "0.3.9" } });
-	await until(() => host!.messages.some((m) => m.type === "ready"));
-	for (const surface of ["screen:tasks", "screen:labels", "quick"]) host.send({ type: "open", surface, instance: PERSON });
+	await host.hello(CAPS);
+	for (const surface of ["screen:tasks", "screen:labels", "quick"]) await host.open(surface);
 	await until(() => !!tree("quick"));
 	return { saved, event: (name: string, payload?: unknown, surface = "screen:tasks") => send(surface, name, payload) };
 }
 
-async function send(surface: string, name: string, payload?: unknown) {
-	const count = host!.messages.length;
-	host!.send({ type: "event", surface, instance: PERSON, name, payload });
-	await until(() => host!.messages.length > count, 200).catch(() => {});
+/** Sends the person's event (or, with `instance`, an agent's) and waits for its result. */
+async function send(surface: string, name: string, payload?: unknown, instance: string = PERSON) {
+	return host!.event(surface, name, payload, instance === PERSON ? {} : { instance, origin: "agent", agent: "Claude Code" });
 }
+
+let picks = 0;
 
 async function until(check: () => boolean, ms = 2000) {
 	const end = Date.now() + ms;
@@ -43,7 +49,8 @@ async function until(check: () => boolean, ms = 2000) {
 }
 
 /** Selects a row the way Toolbelt does, without waiting for a reply (selecting renders nothing new). */
-const pick = (rowId: string) => host!.send({ type: "event", surface: "screen:tasks", instance: PERSON, name: "select", payload: { table: "tasks", rowId } });
+const pick = (rowId: string, instance: string = PERSON) =>
+	host!.send({ type: "event", id: `pick${++picks}`, surface: "screen:tasks", instance, name: "select", payload: { table: "tasks", rowId }, origin: instance === PERSON ? "person" : "agent", ...(instance !== PERSON && { agent: "Claude Code" }) });
 
 /** The latest tree of a surface's instance (the person's unless named). */
 const tree = (surface: string, instance: string = PERSON): any =>
@@ -87,10 +94,10 @@ test("creates a task with the rich fields and saves it on top of the Inbox", asy
 	const fields = tree("screen:tasks").dialog.children[0].fields;
 	expect(fields.map((f: any) => [f.id, f.type])).toEqual([["name", "text"], ["state", "select"], ["due", "datetime"], ["labels", "tags"], ["related", "tags"], ["desc", "textarea"]]);
 	expect(fields[3].keys.map((k: any) => [k.label, !!k.flag])).toEqual([["Project", false], ["isPersonal", true], ["Priority", false], ["Status", false]]);
-	await event("field", { form: "task", field: "name", value: "Ship OnTrack" });
-	await event("field", { form: "task", field: "due", value: "2026-11-13" });
-	await event("field", { form: "task", field: "labels", value: [{ key: "3", value: "High" }, { key: "2" }] });
-	await event("field", { form: "task", field: "desc", value: "# Plan\n\n- ship" });
+	await event("field", { form: "task-draft", field: "name", value: "Ship OnTrack" });
+	await event("field", { form: "task-draft", field: "due", value: "2026-11-13" });
+	await event("field", { form: "task-draft", field: "labels", value: [{ key: "3", value: "High" }, { key: "2" }] });
+	await event("field", { form: "task-draft", field: "desc", value: "# Plan\n\n- ship" });
 	await event("save", { dialog: "task" });
 	expect(tree("screen:tasks").dialog).toBeUndefined();
 	// The list lands on the new task.
@@ -272,8 +279,8 @@ test("Settings has a New button above each table, and labels can shade their val
 test("values typed on a task join the label's list, with colors the editor and pills use", async () => {
 	const { saved, event } = await start(fixture());
 	await event("new-task");
-	await event("field", { form: "task", field: "name", value: "Plant" });
-	await event("field", { form: "task", field: "labels", value: [{ key: "1", value: "Garden" }] });
+	await event("field", { form: "task-draft", field: "name", value: "Plant" });
+	await event("field", { form: "task-draft", field: "labels", value: [{ key: "1", value: "Garden" }] });
 	await event("save", { dialog: "task" });
 	const project = saved.at(-1)!.labels[0]!;
 	expect(project.values.map((v) => v.text)).toEqual(["Garden"]);
@@ -318,6 +325,8 @@ test("the label editor renames, merges, recolors, reorders and removes values", 
 		"screen:labels",
 	);
 	expect(list().value.map((v: any) => v.key)).toEqual(["v:Low", "v:High", "v:Medium", "n:1"]);
+	// Renames and merges keep every task's value: Save doesn't ask.
+	expect(tree("screen:labels").dialog.actions[0].confirm).toBeUndefined();
 	await event("save", { dialog: "label" }, "screen:labels");
 	const after = saved.at(-1)!;
 	const priority = after.labels.find((l) => l.id === 3)!;
@@ -334,6 +343,8 @@ test("the label editor renames, merges, recolors, reorders and removes values", 
 	// Removing a value removes it from its tasks.
 	await event("edit-label", { rowId: "l3" }, "screen:labels");
 	await event("field", { form: "label-values", field: "values", value: list().value.filter((v: any) => v.text !== "Urgent") }, "screen:labels");
+	// Taking a value off tasks asks first: Toolbelt confirms before Save is sent.
+	expect(tree("screen:labels").dialog.actions[0]).toMatchObject({ id: "save", confirm: "1 task loses its Priority value (Urgent). Save anyway?" });
 	await event("save", { dialog: "label" }, "screen:labels");
 	expect(saved.at(-1)!.tasks.map((t): unknown => t.labels[3])).toEqual(["High", undefined, undefined, undefined, "High"]);
 	expect(toasts().at(-1)).toMatchObject({ text: "Saved Priority; 1 task lost its value", action: { id: "undo" } });
@@ -743,7 +754,7 @@ test("removing a relation, a label or a relation type offers Undo", async () => 
 });
 
 /** The latest view declaration of the Tasks screen: from the handshake, or sent again since. */
-const declared = (): any => (host!.messages.filter((m: any) => m.type === "hello" || m.type === "views").at(-1) as any).views["screen:tasks"];
+const declared = (): any => (host!.messages.filter((m: any) => m.type === "hello" || m.type === "declarations").at(-1) as any).declarations.views["screen:tasks"];
 
 test("filters, search and grouping are the person's view: the SDK applies them, the data file keeps none, Undo stands", async () => {
 	const { saved, event } = await start(fixture());
@@ -814,7 +825,7 @@ test("an agent's instance renders with a view of its own and leaves the person's
 test("labels added, deleted or brought back by Undo send the view declarations again", async () => {
 	const { event } = await start(fixture());
 	expect(Object.keys(declared().filters)).toEqual(["workflow-state", "due", "label:1", "label:2", "label:3", "label:4"]);
-	const sent = () => host!.messages.filter((m: any) => m.type === "views").length;
+	const sent = () => host!.messages.filter((m: any) => m.type === "declarations").length;
 	await event("new-label", undefined, "screen:labels");
 	await event("field", { form: "label", field: "name", value: "Area" }, "screen:labels");
 	// A draft declares nothing.
@@ -968,9 +979,9 @@ test("a new task can start in any state and with relations", async () => {
 	// Each relation type and its inverse; one parent, several of the rest.
 	expect(field("related").keys.slice(0, 2).map((k: any) => [k.key, k.label, !!k.multiple])).toEqual([["parent", "Parent", false], ["~parent", "Child", true]]);
 	expect(field("related").keys[0].values).toContain("#2 Reply to Anna");
-	await event("field", { form: "task", field: "name", value: "Plan launch" });
-	await event("field", { form: "task", field: "state", value: "working" });
-	await event("field", { form: "task", field: "related", value: [{ key: "parent", value: "#1 Write spec" }, { key: "~parent", value: "#2 Reply to Anna" }, { key: "~parent", value: "#3 Fix login bug" }] });
+	await event("field", { form: "task-draft", field: "name", value: "Plan launch" });
+	await event("field", { form: "task-draft", field: "state", value: "working" });
+	await event("field", { form: "task-draft", field: "related", value: [{ key: "parent", value: "#1 Write spec" }, { key: "~parent", value: "#2 Reply to Anna" }, { key: "~parent", value: "#3 Fix login bug" }] });
 	expect(field("related").value).toHaveLength(3);
 	await event("save", { dialog: "task" });
 	const d = saved.at(-1)!;
@@ -980,8 +991,8 @@ test("a new task can start in any state and with relations", async () => {
 	expect(d.tasks.filter((t) => t.relations.some((r) => r.type === "parent" && r.task === task.id)).map((t) => t.id).sort()).toEqual([2, 3]);
 	// Snoozed asks when, on the new task.
 	await event("new-task");
-	await event("field", { form: "task", field: "name", value: "Later" });
-	await event("field", { form: "task", field: "state", value: "snoozed" });
+	await event("field", { form: "task-draft", field: "name", value: "Later" });
+	await event("field", { form: "task-draft", field: "state", value: "snoozed" });
 	await event("save", { dialog: "task" });
 	expect(tree("screen:tasks").dialog).toMatchObject({ id: "snooze" });
 });
@@ -991,7 +1002,7 @@ test("a label's groups show its values as pills; the drawer ends with buttons", 
 	d.tasks[0]!.labels[3] = "High";
 	const { event } = await start(d);
 	expect(table().paneButtons).toBe(true);
-	await event("filter-arrange", { order: ["label:3"], grouped: ["label:3"] });
+	await event("filter-arrange", { order: ["label:3", "workflow-state"], grouped: ["label:3"] });
 	const high = table().sections.find((s: any) => s.id === "l3=High");
 	expect(high.pill).toEqual({ color: "orange", shade: 1 });
 	expect(table().sections.find((s: any) => s.id === "l3=__none").pill).toBeUndefined();
@@ -1000,7 +1011,7 @@ test("a label's groups show its values as pills; the drawer ends with buttons", 
 test("without Workflow grouping every row says its state; an archived one says Archived instead of a mark", async () => {
 	const { event } = await start(fixture());
 	await event("filter", { filter: "workflow-state", values: [] });
-	await event("filter-arrange", { order: [], grouped: [] });
+	await event("filter-arrange", { order: ["workflow-state"], grouped: [] });
 	const row = (id: string) => rows().find((r) => r.id === id);
 	expect(row("1").cells.name.tags[0]).toEqual({ text: "Inbox", icon: STATE_ICONS.inbox });
 	await event("archive", { rowId: "1" });
@@ -1032,16 +1043,20 @@ test("without grouping the list is flat and a filter that would nest past ten le
 	const d = fixture();
 	for (let i = 0; i < 8; i++) d.labels.push({ id: 10 + i, name: `L${i}`, type: "bool", color: "blue", values: [], freeform: false });
 	const { event } = await start(d);
-	await event("filter-arrange", { order: [], grouped: [] });
+	await event("filter-arrange", { order: ["workflow-state"], grouped: [] });
 	expect(table().sections).toBeUndefined();
 	expect(rows().every((r) => r.group === undefined)).toBe(true);
 	const ids = tree("screen:tasks").filters.map((f: any) => f.id);
 	// Status (2) and eight one-level filters fill the ten levels; the rest can't group.
 	await event("filter-arrange", { order: ids, grouped: ids.slice(0, 9) });
 	expect(tree("screen:tasks").filters.filter((f: any) => f.groupDisabled).map((f: any) => f.groupDisabled)).toEqual(Array(ids.length - 9).fill("Grouping goes 10 levels deep at most"));
-	// The toolbar refuses more; a view that asks for it anyway (an agent's) groups ten levels deep.
-	await event("filter-arrange", { order: ids, grouped: ids });
+	// The toolbar refuses more, and so does OnTrack: a view asking for it (an agent's) is refused and keeps the one it had.
+	expect(await event("filter-arrange", { order: ids, grouped: ids })).toMatchObject({ handled: false });
+	expect(host!.refusals.at(-1)).toMatchObject({ instance: PERSON, reason: "the plugin refused this view" });
 	expect(tree("screen:tasks").filters.filter((f: any) => f.group).map((f: any) => f.id)).toEqual(ids.slice(0, 9));
+	await host!.open("screen:tasks", "agent:a", { arrange: { order: ids, grouped: ids } });
+	expect(host!.refusals.at(-1)).toMatchObject({ instance: "agent:a" });
+	expect(tree("screen:tasks", "agent:a").filters.filter((f: any) => f.group).map((f: any) => f.id)).toEqual(["workflow-state"]);
 });
 
 /** #1 is the parent of #2 and #3; #3 is being worked on. */
@@ -1057,15 +1072,27 @@ function family() {
 /** Each row as [id, group, context, child ids], nested rows included. */
 const shape = (list: any[]): any[] => list.map((r) => [r.id, r.group ?? null, r.context ?? null, r.children ? shape(r.children) : []]);
 
-test("Subtasks is a choice after the filters; off, every task is a row of its own", async () => {
+test("Subtasks is a choice after the filters, part of each viewer's view; off, every task is a row of its own", async () => {
 	const { saved, event } = await start(family());
 	const control = tree("screen:tasks").controls[0];
 	expect(control).toMatchObject({ type: "choice", id: "subtasks", label: "Subtasks", value: "off" });
 	expect(control.options.map((o: any) => [o.value, o.section ?? null])).toEqual([["off", null], ["own", "Subtask hierarchy"], ["parent", "Subtask hierarchy"]]);
+	expect(declared()).toMatchObject({ controls: { subtasks: "off" }, options: { controls: { subtasks: ["off", "own", "parent"] } } });
 	expect(rows().map((r) => r.id).sort()).toEqual(["1", "2", "3"]);
+	const writes = saved.length;
+	// The SDK applies it: Toolbelt saves the person's view, OnTrack's data file keeps where views start.
 	await event("field", { form: "subtasks", field: "subtasks", value: "own" });
-	expect(saved.at(-1)!.subtasks).toBe("own");
+	expect(host!.messages.filter((m: any) => m.type === "view").at(-1)).toMatchObject({ instance: PERSON, view: { controls: { subtasks: "own" } } });
+	expect(saved.length).toBe(writes);
+	expect(tree("screen:tasks").controls[0].value).toBe("own");
 	expect(table().reorderOnto).toBe("Make it a subtask");
+	// An agent's instance keeps its own choice, and a value the control doesn't offer is refused.
+	await host!.open("screen:tasks", "agent:a", { controls: { subtasks: "parent" } });
+	expect(tree("screen:tasks", "agent:a").controls[0].value).toBe("parent");
+	expect(tree("screen:tasks").controls[0].value).toBe("own");
+	const r = await send("screen:tasks", "field", { form: "subtasks", field: "subtasks", value: "sideways" }, "agent:a");
+	expect(r).toMatchObject({ handled: false });
+	expect(tree("screen:tasks", "agent:a").controls[0].value).toBe("parent");
 });
 
 test("staying in their own group, a parent elsewhere shows dimmed above its subtasks", async () => {
@@ -1196,4 +1223,206 @@ test("the Workflow menu follows the list: Progressing's states under their headi
 	await start(fixture());
 	const status = tree("screen:tasks").filters[0];
 	expect(status.options.map((o: any) => [o.value, o.section])).toEqual([["inbox", undefined], ["working", "Progressing"], ["stalled", "Progressing"], ["snoozed", "Progressing"], ["watching", "Progressing"], ["settled", undefined], ["archived", undefined]]);
+});
+
+// ── agents (protocol 3) ─────────────────────────────────────────────────
+
+const AGENT = "agent:s1:screen:tasks";
+/** An agent's event in its acting instance of a screen. */
+const agent = (name: string, payload?: unknown, surface = "screen:tasks", instance = AGENT) => send(surface, name, payload, instance);
+
+test("every action and form a screen uses is declared, each with an honest effect", async () => {
+	const { event } = await start(family());
+	const declarations = host!.declarations;
+	expect(declarations.actions).toMatchObject({
+		"new-task": { effect: "view" },
+		snooze: { effect: "view" },
+		watch: { effect: "view" },
+		relate: { effect: "view" },
+		save: { effect: "write" },
+		settle: { effect: "write" },
+		unsettle: { effect: "write" },
+		delete: { effect: "destructive" },
+		"delete-label": { effect: "destructive" },
+	});
+	expect(declarations.forms).toMatchObject({ task: { effect: "write" }, "task-draft": { effect: "view" }, snooze: { effect: "view" }, stall: { effect: "write" } });
+	// Every Snooze menu time there can be.
+	expect(Object.keys(declarations.actions).filter((id) => id.startsWith("snooze:"))).toEqual(["snooze:3h", "snooze:evening", "snooze:tomorrow", "snooze:monday"]);
+	// Every dialog, on both screens, with subtasks shown: the host accepts each tree (afterEach checks `rejected`).
+	await event("field", { form: "subtasks", field: "subtasks", value: "own" });
+	for (const [name, payload] of [
+		["new-task"],
+		["edit", { rowId: "2" }],
+		["relate", { rowId: "2" }],
+		["snooze", { rowId: "2" }],
+		["watch", { rowId: "2" }],
+		["add-update", { rowId: "2" }],
+	] as [string, unknown?][]) {
+		await event(name, payload);
+		expect(tree("screen:tasks").dialog).toBeDefined();
+		await event("dialog-close", { dialog: tree("screen:tasks").dialog.id });
+	}
+	await event("add-update", { rowId: "2", text: "First" });
+	await event("edit-update", { timeline: "updates", entryId: "1", rowId: "2" });
+	expect(tree("screen:tasks").dialog.children.some((c: any) => c.id === "update-edit")).toBe(true);
+	await event("dialog-close", { dialog: "updates" });
+	await event("settle", { rowId: "2" });
+	for (const [name, payload] of [["new-label"], ["edit-label", { rowId: "l3" }], ["new-relation-type"], ["edit-relation-type", { rowId: "rblocks" }]] as [string, unknown?][]) {
+		await event(name, payload, "screen:labels");
+		expect(tree("screen:labels").dialog).toBeDefined();
+		await event("dialog-close", { dialog: tree("screen:labels").dialog.id }, "screen:labels");
+	}
+	expect(host!.rejected).toEqual([]);
+});
+
+test("an agent creates a task through the New task dialog in its own instance, and gets its id back", async () => {
+	const { saved, event } = await start(fixture());
+	await host!.open("screen:tasks", AGENT);
+	// The person has a draft of their own open; the agent's never touches it.
+	await event("new-task");
+	await event("field", { form: "task-draft", field: "name", value: "The person's draft" });
+	expect(await agent("new-task")).toMatchObject({ handled: true });
+	expect(tree("screen:tasks", AGENT).dialog).toMatchObject({ id: "task", title: "New task" });
+	await agent("field", { form: "task-draft", field: "name", value: "Book the venue" });
+	await agent("field", { form: "task-draft", field: "labels", value: [{ key: "3", value: "High" }] });
+	await agent("field", { form: "task-draft", field: "state", value: "working" });
+	expect(tree("screen:tasks").dialog.children[0].fields[0].value).toBe("The person's draft");
+	const writes = saved.length;
+	const r = await agent("save", { dialog: "task" });
+	expect(r).toMatchObject({ handled: true, data: { task: 4 } });
+	expect(r.error).toBeUndefined();
+	// Its navigation is the agent's, tagged with its event; the person's draft is still open.
+	expect(r.navigations).toEqual([{ screen: "tasks", select: "4" }]);
+	expect(tree("screen:tasks", AGENT).dialog).toBeUndefined();
+	expect(tree("screen:tasks").dialog.children[0].fields[0].value).toBe("The person's draft");
+	expect(saved.length).toBe(writes + 1);
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 4)).toMatchObject({ name: "Book the venue", labels: { 3: "High" }, state: "working" });
+	// A draft that can't be saved says why: in the agent's dialog and in the result, never as a toast to the person.
+	await agent("new-task");
+	const bad = await agent("save", { dialog: "task" });
+	expect(bad.error).toBe("A task needs a name.");
+	expect(bad.toasts).toEqual([]);
+	expect(tree("screen:tasks", AGENT).dialog.children[0]).toMatchObject({ type: "text", tone: "danger", text: "A task needs a name." });
+	// The quick view's New task line answers with the new id too.
+	expect(await send("quick", "quick-task", { composer: "quick-task", text: "Jot" })).toMatchObject({ data: { task: 5 } });
+	// The agent's instance closing drops its dialog.
+	await host!.closeInstance("screen:tasks", AGENT);
+	await host!.open("screen:tasks", AGENT);
+	expect(tree("screen:tasks", AGENT).dialog).toBeUndefined();
+});
+
+test("an agent relates, snoozes and watches tasks through their dialogs", async () => {
+	const { saved } = await start(fixture());
+	await host!.open("screen:tasks", AGENT);
+	await agent("relate", { rowId: "1" });
+	await agent("field", { form: "relate", field: "type", value: "blocks" });
+	await agent("field", { form: "relate", field: "to", value: "3" });
+	expect(await agent("save", { dialog: "relate" })).toMatchObject({ handled: true });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 1)!.relations).toEqual([{ task: 3, type: "blocks" }]);
+	await agent("snooze", { rowId: "2" });
+	expect(tree("screen:tasks", AGENT).dialog).toMatchObject({ id: "snooze" });
+	expect(tree("screen:tasks").dialog).toBeUndefined();
+	await agent("field", { form: "snooze", field: "until", value: "2026-11-16" });
+	const snoozed = await agent("save", { dialog: "snooze" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 2)).toMatchObject({ state: "snoozed", snoozedUntil: new Date(2026, 10, 16, 9, 0).getTime() });
+	// Its Undo toast is in the result (Toolbelt also shows it to the person, whose Undo it stays).
+	expect(snoozed.toasts[0]).toMatchObject({ action: { id: "undo" } });
+	await agent("watch", { rowId: "3" });
+	await agent("field", { form: "watch", field: "on", value: "Anna" });
+	await agent("field", { form: "watch", field: "repeat", value: "none" });
+	await agent("save", { dialog: "watch" });
+	expect(saved.at(-1)!.tasks.find((t) => t.id === 3)).toMatchObject({ state: "watching", watch: { on: "Anna" } });
+	// A field for a dialog the instance doesn't have open does nothing, and says so.
+	expect(await agent("field", { form: "snooze", field: "until", value: "2026-11-20" })).toMatchObject({ handled: false });
+	expect(await agent("save", { dialog: "snooze" })).toMatchObject({ handled: false });
+});
+
+test("S settles a task and S again marks it not done", async () => {
+	const { event } = await start(fixture());
+	const keyed = (id: string) => table().actions.find((a: any) => a.id === id);
+	expect([keyed("settle").key, keyed("unsettle").key]).toEqual(["s", "s"]);
+	expect(rows().find((r) => r.id === "1").actions).not.toContain("unsettle");
+	await event("settle", { rowId: "1" });
+	expect(rows().find((r) => r.id === "1").actions).toEqual(expect.arrayContaining(["unsettle", "reopen"]));
+	expect(rows().find((r) => r.id === "1").actions).not.toContain("settle");
+	await event("unsettle", { rowId: "1" });
+	expect(bySection().inbox).toContain("Write spec");
+	expect(toasts().at(-1)).toMatchObject({ text: "#1 back in the Inbox", action: { id: "undo" } });
+});
+
+test("an agent opening or selecting a task doesn't mark it read", async () => {
+	const d = fixture();
+	d.tasks.forEach((t) => (t.unread = true));
+	const { saved } = await start(d);
+	await host!.open("screen:tasks", AGENT);
+	pick("1", AGENT);
+	await Bun.sleep(READ_MS * 3);
+	expect(rows().find((r) => r.id === "1")).toMatchObject({ unread: true });
+	// Its edit and update dialogs don't read it either.
+	await agent("edit", { rowId: "1" });
+	await agent("dialog-close", { dialog: "task" });
+	await Bun.sleep(READ_MS * 2);
+	expect(saved.at(-1)?.tasks.find((t) => t.id === 1)?.unread ?? true).toBe(true);
+	// The person's selection does.
+	pick("1");
+	await Bun.sleep(READ_MS * 3);
+	expect(rows().find((r) => r.id === "1").unread).toBeUndefined();
+});
+
+test("following a relation finds the task in the view of whoever followed it", async () => {
+	const d = family();
+	d.tasks.find((t) => t.id === 3)!.relations.push({ task: 2, type: "blocks" });
+	const { event } = await start(d);
+	// The agent's view hides #2; the person's shows it.
+	await host!.open("screen:tasks", AGENT, { search: "login" });
+	const hidden = await agent("open-task", { list: "rel-blocks", item: "rel:2", rowId: "3" });
+	expect(hidden).toMatchObject({ error: "#2 is hidden by the search or filters.", toasts: [], navigations: [] });
+	const shown = await agent("open-task", { list: "rel-parent", item: "rel:1", rowId: "3" }, "screen:tasks", "agent:s2:screen:tasks");
+	expect(shown.navigations).toEqual([{ screen: "tasks", select: "1" }]);
+	const r = await event("open-task", { list: "rel-blocks", item: "rel:2", rowId: "3" });
+	expect(r.navigations).toEqual([{ screen: "tasks", select: "2" }]);
+});
+
+test("a view saved while the Workflow filter was `status` keeps grouping by it", async () => {
+	const { event } = await start(fixture());
+	// Toolbelt reopens the person's screen with the view it saved for 0.15.0; the SDK drops `status`, which isn't declared.
+	await host!.closeInstance("screen:tasks");
+	await host!.open("screen:tasks", PERSON, { filters: { due: ["overdue"] }, arrange: { order: ["status", "label:3", "due", "label:1", "label:2", "label:4"], grouped: ["status", "label:3"] } });
+	expect(tree("screen:tasks").filters.map((f: any) => [f.id, f.group])).toEqual([
+		["workflow-state", true],
+		["label:3", true],
+		["due", false],
+		["label:1", false],
+		["label:2", false],
+		["label:4", false],
+	]);
+	await event("filter", { filter: "due", values: [] });
+	expect(rows()[0].group).toBe("inbox/l3=__none");
+});
+
+test("an agent edits a label's values as texts: kept values keep their colors, and removing one asks first", async () => {
+	const d = fixture();
+	d.tasks[0]!.labels[3] = "High";
+	d.tasks[1]!.labels[3] = "Low";
+	const priority = d.labels.find((l) => l.id === 3)!;
+	priority.valueColors = true;
+	const { saved } = await start(d);
+	const SETTINGS = "agent:s1:labels";
+	await host!.open("screen:labels", SETTINGS);
+	await agent("edit-label", { rowId: "l3" }, "screen:labels", SETTINGS);
+	const dialog = () => tree("screen:labels", SETTINGS).dialog;
+	// Toolbelt sends an agent's list as texts, without the editor's keys.
+	await agent("field", { form: "label-values", field: "values", value: [{ text: "Low" }, { text: "Medium" }, { text: "Someday" }] }, "screen:labels", SETTINGS);
+	expect(dialog().actions[0].confirm).toBe("1 task loses its Priority value (High). Save anyway?");
+	expect(tree("screen:labels").dialog).toBeUndefined();
+	const r = await agent("save", { dialog: "label" }, "screen:labels", SETTINGS);
+	expect(r.toasts[0]).toMatchObject({ text: "Saved Priority; 1 task lost its value", action: { id: "undo" } });
+	const after = saved.at(-1)!.labels.find((l) => l.id === 3)!;
+	const color = (text: string) => priority.values.find((v) => v.text === text)!.color;
+	expect(after.values.map((v) => [v.text, v.color])).toEqual([
+		["Low", color("Low")],
+		["Medium", color("Medium")],
+		["Someday", expect.any(String)],
+	]);
+	expect(saved.at(-1)!.tasks.map((t): unknown => t.labels[3])).toEqual([undefined, "Low", undefined]);
 });
