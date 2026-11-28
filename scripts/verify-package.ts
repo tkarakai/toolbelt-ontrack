@@ -1,11 +1,12 @@
 // Runs the built archive the way Toolbelt does: extracted into a temporary folder with no source
 // checkout or node_modules, a fresh data directory initialized by the packaged migration, every
-// surface opened for the person, a task created through their events, then a clean prepare and
-// shutdown.
+// surface opened for the person, a task created through their events (the save answering with its
+// id), then a clean prepare and shutdown.
 import { $ } from "bun";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HOST_VERSION } from "@toolbelt/sdk";
 import { parsePackageManifest } from "@toolbelt/sdk/package";
 
 const version = JSON.parse(await Bun.file("toolbelt.json").text()).version;
@@ -27,7 +28,8 @@ try {
 
 	const proc = Bun.spawn([process.execPath, join(pkg, "index.js")], { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 10000 });
 	const send = (msg: unknown) => proc.stdin.write(JSON.stringify(msg) + "\n");
-	send({ type: "hello", protocol: 2, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.6.0" } });
+	send({ type: "hello", protocol: m.protocol, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: HOST_VERSION } });
+	const event = (id: string, name: string, payload?: unknown) => send({ type: "event", id, surface: "screen:tasks", instance: "person", name, ...(payload !== undefined && { payload }), origin: "person" });
 	const surfaces = [...m.screens.map((s) => `screen:${s.id}`), "quick"];
 	const rendered = new Set<string>();
 	let buffer = "";
@@ -39,8 +41,10 @@ try {
 			buffer = buffer.slice(at + 1);
 			if (!line) continue;
 			const msg = JSON.parse(line);
-			// The Tasks screen declares its view (search, filters and their arrangement) in the handshake.
-			if (msg.type === "hello" && !(msg.views?.["screen:tasks"]?.search && msg.views["screen:tasks"].arrange)) throw Error("Expected the Tasks view declaration");
+			// The handshake declares the Tasks view (search, filters and their arrangement) and every action and form.
+			if (msg.type === "hello" && !(msg.declarations?.views?.["screen:tasks"]?.search && msg.declarations.views["screen:tasks"].arrange && msg.declarations.actions?.save?.effect === "write" && msg.declarations.forms?.["task-draft"]?.effect === "view"))
+				throw Error("Expected the declarations in the handshake");
+			if (msg.type === "result" && msg.error) throw Error(`Event ${msg.id} failed: ${msg.error}`);
 			if (msg.type === "ready" && step === "ready") {
 				step = "render";
 				for (const surface of surfaces) send({ type: "open", surface, instance: "person" });
@@ -48,9 +52,12 @@ try {
 			if (msg.type === "render") rendered.add(msg.surface);
 			if (step === "render" && rendered.size === surfaces.length) {
 				step = "create";
-				send({ type: "event", surface: "screen:tasks", instance: "person", name: "new-task" });
-				send({ type: "event", surface: "screen:tasks", instance: "person", name: "field", payload: { form: "task", field: "name", value: "Packaged task" } });
-				send({ type: "event", surface: "screen:tasks", instance: "person", name: "save", payload: { dialog: "task" } });
+				event("open", "new-task");
+				event("name", "field", { form: "task-draft", field: "name", value: "Packaged task" });
+				event("save", "save", { dialog: "task" });
+			}
+			if (msg.type === "result" && msg.id === "save") {
+				if (msg.data?.task !== 1) throw Error("Expected the new task's id in the save's result");
 				send({ type: "prepare", requestId: "verify", reason: "upgrade" });
 			}
 			if (msg.type === "prepared") {

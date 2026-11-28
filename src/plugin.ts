@@ -1,10 +1,11 @@
 // Connects the SDK to the model: events change the data or open dialogs, every data change is
-// saved immediately, and the open surfaces re-render. The search, filters and grouping are the
-// SDK's view, one per viewer (Toolbelt saves the person's); dialogs belong to the person, the only
-// one who sends events. In active mode a timer wakes snoozed tasks, brings watched tasks back for
-// their check-ins, announces due dates, stalls tasks left untouched and reminds you of stalled
-// ones; probe mode starts no timers.
-import { HUES, PERSON, resolveView, type Context, type Hue, type PluginDefinition, type TagValue, type View as SdkView } from "@toolbelt/sdk";
+// saved immediately, and the open surfaces re-render. The search, filters, grouping and Subtasks
+// choice are the SDK's view, one per viewer (Toolbelt saves the person's); each instance has its
+// own dialog, so an agent's drafts never touch the person's. In active mode a timer wakes snoozed
+// tasks, brings watched tasks back for their check-ins, announces due dates, stalls tasks left
+// untouched and reminds you of stalled ones; probe mode starts no timers.
+import { HUES, PERSON, type Context, type EventInfo, type Hue, type PluginDefinition, type TagValue, type View as SdkView } from "@toolbelt/sdk";
+import { ACTIONS, FORMS } from "./declarations";
 import * as display from "./display";
 import * as life from "./lifecycle";
 import * as model from "./model";
@@ -20,6 +21,7 @@ const MOVES: Record<string, model.TaskState> = {
 	wake: "inbox",
 	unwatch: "inbox",
 	reopen: "inbox",
+	unsettle: "inbox",
 	unstall: "inbox",
 	stall: "stalled",
 	resume: "working",
@@ -46,13 +48,19 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	 * before `start`, so whichever comes first loads it.
 	 */
 	const loadOnce = () => {
-		if (!loaded) (data = load()), (loaded = true);
+		if (!loaded) {
+			data = load();
+			// The view declarations come from the stored row, which follows the labels.
+			data.filters = display.normalizeFilters(data);
+			loaded = true;
+		}
 		return data;
 	};
-	/** What only the person has: the open dialog (agents never send events, so never open one). */
-	const person: { dialog?: Dialog } = {};
-	/** The person's Tasks view as last rendered: what the person sees when they act on it. */
-	let personTasks: SdkView | undefined;
+	/**
+	 * Each instance's open dialog: every person's screen shares `PERSON`'s; an agent acting on a
+	 * screen fills dialogs in an instance of its own, which closes with it.
+	 */
+	const dialogs = new Map<string, Dialog>();
 	/** The view declarations last sent, to send them again only when they change. */
 	let declared = "";
 	/**
@@ -67,8 +75,10 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	let reading: ReturnType<typeof setTimeout> | undefined;
 	let readingId: number | undefined;
 	let context: Context | undefined;
-	/** The Subtasks choice changed: saved, but not a change Undo needs to give way to. */
-	let viewChanged = false;
+	/** What the event being handled returns to whoever sent it (`{ data }`), such as a created task's id. */
+	let answer: Record<string, unknown> | undefined;
+	/** The event being handled names nothing OnTrack does (not handled). */
+	let unknown = false;
 	/** The day the list was last drawn for: due groups move on at midnight. */
 	let drawnDay = new Date(now()).toDateString();
 
@@ -136,17 +146,17 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	 * going back to Working on opens the update box for its next step; any other state is a
 	 * `transition` now. Refused moves throw before anything opens. Returns whether data changed.
 	 */
-	function moveTo(task: model.Task, to: model.TaskState, c: Context, surface: string, before: Data, at: number | null = null): boolean {
+	function moveTo(task: model.Task, to: model.TaskState, c: Context, surface: string, instance: string, before: Data, at: number | null = null): boolean {
 		const t = now();
 		const refused = to === task.state && (to === "snoozed" || to === "watching") ? undefined : life.refusal(task, to);
 		if (refused) throw new InvalidInput(refused);
 		if (to === "stalled" && !data.stall.on) throw new InvalidInput("Stalling is off in Settings.");
 		const resume = to === "working" && task.state === "stalled";
 		if (to === "snoozed" || to === "watching" || resume) {
-			person.dialog = resume ? nextStep(task) : to === "snoozed" ? snoozeDialog(task, t) : watchDialog(task, t);
+			dialogs.set(instance, resume ? nextStep(task) : to === "snoozed" ? snoozeDialog(task, t) : watchDialog(task, t));
 			// From the quick view, the dialog opens in the main window, on the task.
 			if (surface === "quick" && !c.navigate("tasks", { select: String(task.id) })) {
-				person.dialog = undefined;
+				dialogs.delete(instance);
 				throw new InvalidInput("Open OnTrack to choose when.");
 			}
 			return false;
@@ -162,7 +172,7 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 	 * like its key (`moveTo`, so Snoozed and Watching open their dialog). Within the task's own
 	 * Inbox or Working on the drop reorders. One Undo covers it all.
 	 */
-	function dropInto(task: model.Task, section: string, at: number | null, c: Context, surface: string, before: Data): boolean {
+	function dropInto(task: model.Task, section: string, at: number | null, c: Context, surface: string, instance: string, before: Data): boolean {
 		const t = now();
 		const target = display.dropTarget(section);
 		if (!target.size) throw new InvalidInput("Group the list to move tasks by dragging.");
@@ -204,19 +214,19 @@ export function ontrack({ load, save, now = Date.now, readAfterMs = READ_AFTER_M
 			if (edited || (wasArchived && to)) offerUndo(c, wasArchived && to ? `Unarchived #${task.id}` : `Moved #${task.id}`, before);
 			return true;
 		}
-		return moveTo(task, to, c, surface, before, place) || edited || wasArchived;
+		return moveTo(task, to, c, surface, instance, before, place) || edited || wasArchived;
 	}
 
 	/**
 	 * A field of the drawer's property sheet. Status moves the task (`moveTo`); the rest saves
 	 * through the same checks as the Edit dialog.
 	 */
-	function editInPlace(task: model.Task, field: string, value: unknown, c: Context, before: Data): boolean {
+	function editInPlace(task: model.Task, field: string, value: unknown, c: Context, instance: string, before: Data): boolean {
 		const t = now();
 		if (field === "state") {
 			const to = String(value) as model.TaskState;
 			if (to === task.state || !life.STATES.includes(to)) return false;
-			return moveTo(task, to, c, "screen:tasks", before);
+			return moveTo(task, to, c, "screen:tasks", instance, before);
 		}
 		const input = { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } };
 		if (field === "related") return editRelations(task, Array.isArray(value) ? (value as TagValue[]) : [], c, before);
@@ -255,17 +265,18 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 		return walk(table?.rows ?? []);
 	}
 
-	/** The person's Tasks view: as last rendered, else where views start. */
-	const personView = (): SdkView => personTasks ?? resolveView(display.viewDeclaration(data), {}, PERSON);
-
 	/** The row a task has in a view of the Tasks list, if it shows there. */
 	function shownRow(v: SdkView, id: number, t: number): string | undefined {
 		const shown = rowIds(tasksScreen(data, v, t));
 		return shown.find((r) => r === String(id)) ?? shown.find((r) => r.startsWith(`c${id}@`));
 	}
 
-	/** What a screen renders with: the instance's view, and the dialog only on the person's. */
-	const screenView = (v: SdkView): View => ({ search: v.search, filters: v.filters, arrange: v.arrange, ...(v.instance === PERSON && person.dialog && { dialog: person.dialog }) });
+	/** What a screen renders with: the instance's view and its dialog. */
+	const screenView = (v: SdkView): View => {
+		const subtasks = v.controls.subtasks as model.SubtaskMode | undefined;
+		const dialog = dialogs.get(v.instance);
+		return { search: v.search, filters: v.filters, arrange: v.arrange, ...(subtasks && model.SUBTASK_MODES.includes(subtasks) && { subtasks }), ...(dialog && { dialog }) };
+	};
 
 	/** Saves and updates after a change the clock made since the last look. */
 	function catchUp(c: Context) {
@@ -277,14 +288,19 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 		c.invalidate();
 	}
 
-	/** The view declarations follow the labels (a filter each): sent again when they change. */
+	/** The view declarations follow the labels (a filter each, with their values): sent again when they change. */
 	function redeclare(c: Context) {
-		if (JSON.stringify(display.viewDeclaration(data)) !== declared) c.declareViews();
+		if (JSON.stringify(display.viewDeclaration(data)) !== declared) c.declare();
 	}
 
-	/** Returns true when the data changed. */
-	function onEvent(surface: string, name: string, p: any, c: Context, before: Data): boolean {
-		const dialog = person.dialog;
+	/**
+	 * Handles an event from `ev.instance`, whose dialog it works on. Returns true when the data
+	 * changed; sets `answer` for what the sender gets back and `unknown` when it names nothing.
+	 */
+	function onEvent(surface: string, name: string, p: any, c: Context, before: Data, ev: EventInfo): boolean {
+		const { instance } = ev;
+		const dialog = dialogs.get(instance);
+		const setDialog = (next: Dialog | undefined) => (next ? dialogs.set(instance, next) : dialogs.delete(instance));
 		const rowId = () => Number(String(p?.rowId ?? "").replace(/^[lr]/, ""));
 		const t = now();
 		const name2 = (id: number) => `#${id}`;
@@ -304,10 +320,12 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 		switch (name) {
 			// The search and filter row are the SDK's view (`views`): their events never come here.
 			case "dialog-close":
-				person.dialog = undefined;
+				setDialog(undefined);
 				return false;
 			case "select": {
-				// Opening a task marks it read once it has stayed open a moment.
+				// Opening a task marks it read once it has stayed open a moment, for the person only:
+				// an agent looking at a task hasn't read it for them.
+				if (ev.origin !== "person") return false;
 				clearTimeout(reading);
 				readingId = undefined;
 				const task = p?.rowId ? data.tasks.find((x) => x.id === rowId()) : undefined;
@@ -322,7 +340,7 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 					offerUndo(c, `#${rowId()} is now a subtask of #${parent}`, before);
 					return true;
 				}
-				return dropInto(model.findTask(data, rowId()), String(p?.section ?? ""), p?.before ? Number(p.before) : null, c, surface, before);
+				return dropInto(model.findTask(data, rowId()), String(p?.section ?? ""), p?.before ? Number(p.before) : null, c, surface, instance, before);
 			}
 			// ⌥→ goes under the task above; ⌥← moves out to the parent's parent.
 			case "indent": {
@@ -341,23 +359,20 @@ if (field === "labels") input.labels = fromTagValues(Array.isArray(value) ? valu
 			}
 			case "undo":
 				if (!undo || undo.until < t || p?.token !== undo.token) throw new InvalidInput(undo && undo.until >= t ? "Only the latest change can be undone." : "Too late to undo.");
-				// Undo reverts the change, not the Subtasks choice made since.
-				data = { ...undo.data, subtasks: data.subtasks };
+				data = undo.data;
 				undo = undefined;
 				return true;
 			case "field": {
 				const value = fieldValue(p?.value);
 				// The details drawer edits the task in place: each field saves on its own.
-				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, before);
+				if (p?.form === "task" && p?.rowId !== undefined) return editInPlace(model.findTask(data, rowId()), String(p.field), value, c, instance, before);
 				// Settings' Stalling card: each setting saves on its own.
 				if (p?.form === "stall") {
 					model.setStall(data, { [String(p.field)]: value });
 					return true;
 				}
-				if (p?.form === "subtasks") {
-					if (model.SUBTASK_MODES.includes(value as model.SubtaskMode)) data.subtasks = value as model.SubtaskMode;
-					viewChanged = true;
-				} else if (dialog?.kind === "task" && p?.form === "task") {
+				// Dialog drafts: only this instance's dialog, nothing saved until its Save.
+				if (dialog?.kind === "task" && p?.form === "task-draft") {
 					if (p.field === "labels") dialog.draft.labels = fromTagValues(Array.isArray(value) ? value : []);
 else if (p.field === "state" && life.STATES.includes(value as model.TaskState)) dialog.start = { ...(dialog.start ?? newTaskStart()), state: value as model.TaskState };
 else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStart()), related: Array.isArray(value) ? (value as TagValue[]).filter((v) => typeof v?.key === "string") : [] };
@@ -389,7 +404,7 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					if (field.startsWith("edit-text")) dialog.editing.text = String(value);
 					if (field === "edit-added") dialog.editing.added = String(value);
 					if (field === "edit-updated") dialog.editing.updated = String(value);
-				}
+				} else unknown = true;
 				return false;
 			}
 			// ── the state machine: each move's action, through `moveTo` ──
@@ -404,7 +419,8 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			case "snooze":
 			case "watch":
 			case "settle":
-				return moveTo(model.findTask(data, rowId()), MOVES[name], c, surface, before);
+			case "unsettle":
+				return moveTo(model.findTask(data, rowId()), MOVES[name]!, c, surface, instance, before);
 			case "archive":
 				life.archive(data, rowId(), t);
 				offerUndo(c, `Archived ${name2(rowId())}`, before);
@@ -423,24 +439,24 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 				return life.move(data, rowId(), name === "up" ? -1 : 1, t);
 			// ── editing ──
 			case "new-task":
-				person.dialog = { kind: "task", draft: { name: "", due: "", desc: "", labels: {} }, start: newTaskStart() };
+				setDialog({ kind: "task", draft: { name: "", due: "", desc: "", labels: {} }, start: newTaskStart() });
 				return false;
 			case "edit": {
 				const task = model.findTask(data, rowId());
-				person.dialog = { kind: "task", id: task.id, draft: { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } } };
+				setDialog({ kind: "task", id: task.id, draft: { name: task.name, due: task.due ?? "", desc: task.desc, labels: { ...task.labels } } });
 				return false;
 			}
 			// ── updates ──
 			case "add-update":
 				// Written in the drawer's composer or the quick view; otherwise the Updates dialog.
 				if (typeof p?.text === "string") {
-					model.addUpdate(data, rowId(), p.text, t);
+					answer = { task: rowId(), update: model.addUpdate(data, rowId(), p.text, t).id };
 					return true;
 				}
 				{
 					// On a stalled task, the update is its next step.
 					const task = model.findTask(data, rowId());
-					person.dialog = task.state === "stalled" && !task.archived ? nextStep(task) : { kind: "updates", id: task.id, draft: "" };
+					setDialog(task.state === "stalled" && !task.archived ? nextStep(task) : { kind: "updates", id: task.id, draft: "" });
 				}
 				return false;
 			case "edit-update-text": {
@@ -451,37 +467,37 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			case "quick-task": {
 				const task = model.addTask(data, { name: String(p?.text ?? ""), due: "", desc: "", labels: {} }, t);
 				c.toast(`Added #${task.id} to the Inbox`, "success");
+				answer = { task: task.id };
 				return true;
 			}
 			case "edit-update": {
 				const { task, update } = updateRef();
 				const fromDrawer = !(dialog?.kind === "updates" && dialog.id === task.id);
-				person.dialog = { kind: "updates", id: task.id, draft: dialog?.kind === "updates" ? dialog.draft : "", editing: updateDraft(update, fromDrawer) };
+				setDialog({ kind: "updates", id: task.id, draft: dialog?.kind === "updates" ? dialog.draft : "", editing: updateDraft(update, fromDrawer) });
 				return false;
 			}
 			case "update-back":
-				if (dialog?.kind !== "updates") return false;
-				if (dialog.editing?.closeAfter) person.dialog = undefined;
-				else person.dialog = { kind: "updates", id: dialog.id, draft: dialog.draft };
+				if (dialog?.kind !== "updates") return (unknown = true), false;
+				setDialog(dialog.editing?.closeAfter ? undefined : { kind: "updates", id: dialog.id, draft: dialog.draft });
 				return false;
 			case "delete-update": {
 				const { task, update } = updateRef();
 				model.deleteUpdate(data, task.id, update.id, t);
 				// Deleting the update being edited goes back to the list.
-				if (dialog?.kind === "updates" && dialog.editing?.update === update.id) person.dialog = { kind: "updates", id: dialog.id, draft: dialog.draft };
+				if (dialog?.kind === "updates" && dialog.editing?.update === update.id) setDialog({ kind: "updates", id: dialog.id, draft: dialog.draft });
 				offerUndo(c, `Deleted an update on ${name2(task.id)}`, before);
 				return true;
 			}
 			case "relate":
-				person.dialog = { kind: "relate", from: model.findTask(data, rowId()).id, type: data.relationTypes[0]?.id ?? "", to: "" };
+				setDialog({ kind: "relate", from: model.findTask(data, rowId()).id, type: data.relationTypes[0]?.id ?? "", to: "" });
 				return false;
 			// A relation followed from the drawer: select that task in the table.
 			case "open-task":
 			case "open-related": {
 				const id = name === "open-task" ? Number(String(p?.item ?? "").replace(/^rel:/, "")) : relatedId(String(p?.value ?? ""));
 				const task = model.findTask(data, id ?? Number.NaN);
-				// Where the person sees it, maybe only as a parent standing in another group (`c<id>@<group>`).
-				const row = shownRow(personView(), task.id, t);
+				// Where the sender sees it, maybe only as a parent standing in another group (`c<id>@<group>`).
+				const row = shownRow(ev.view, task.id, t);
 				if (!row) throw new InvalidInput(`#${task.id} is hidden by the search or filters.`);
 				if (!c.navigate("tasks", { select: row })) throw new InvalidInput(`Find #${task.id} in the list.`);
 				return false;
@@ -491,11 +507,11 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 				offerUndo(c, `Deleted ${name2(rowId())}`, before);
 				return true;
 			case "new-label":
-				person.dialog = { kind: "label", draft: labelDraft() };
+				setDialog({ kind: "label", draft: labelDraft() });
 				return false;
 			case "edit-label": {
 				const l = model.findLabel(data, rowId());
-				person.dialog = { kind: "label", id: l.id, draft: labelDraft(l) };
+				setDialog({ kind: "label", id: l.id, draft: labelDraft(l) });
 				return false;
 			}
 			case "delete-label": {
@@ -505,11 +521,11 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 				return true;
 			}
 			case "new-relation-type":
-				person.dialog = { kind: "relationType", name: "", inverse: "" };
+				setDialog({ kind: "relationType", name: "", inverse: "" });
 				return false;
 			case "edit-relation-type": {
 				const rt = model.findRelationType(data, String(p?.rowId ?? "").slice(1));
-				person.dialog = { kind: "relationType", id: rt.id, name: rt.name, inverse: rt.inverse === rt.name ? "" : rt.inverse };
+				setDialog({ kind: "relationType", id: rt.id, name: rt.name, inverse: rt.inverse === rt.name ? "" : rt.inverse });
 				return false;
 			}
 			case "delete-relation-type": {
@@ -519,7 +535,7 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 				return true;
 			}
 			case "save":
-				if (!dialog) return false;
+				if (!dialog) return (unknown = true), false;
 				if (dialog.kind === "task") {
 					if (dialog.id) model.updateTask(data, dialog.id, dialog.draft, t);
 					else {
@@ -529,11 +545,12 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 						if (related.some((r) => r.to === undefined || !data.tasks.some((x) => x.id === r.to))) throw new InvalidInput("A related task no longer exists.");
 						const task = model.addTask(data, dialog.draft, t);
 						for (const r of related) model.relate(data, task.id, r.type, r.to!, r.inverse, t);
-						person.dialog = undefined;
+						answer = { task: task.id };
+						setDialog(undefined);
 						c.navigate("tasks", { select: String(task.id) });
 						// Its starting state: Snoozed and Watching ask when, in their dialog, on the new task.
-						if (start.state === "snoozed") person.dialog = snoozeDialog(task, t);
-						else if (start.state === "watching") person.dialog = watchDialog(task, t);
+						if (start.state === "snoozed") setDialog(snoozeDialog(task, t));
+						else if (start.state === "watching") setDialog(watchDialog(task, t));
 						else if (start.state !== "inbox") life.transition(data, task.id, start.state, {}, t);
 						return true;
 					}
@@ -546,7 +563,7 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					if (!due) throw new InvalidInput("Choose when it should come back.");
 					const until = model.dueAt(due.includes("T") ? due : `${due}T09:00`);
 					life.transition(data, dialog.id, "snoozed", { until }, t);
-					person.dialog = undefined;
+					setDialog(undefined);
 					offerUndo(c, `Snoozed ${name2(dialog.id)} until ${new Date(until).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`, before);
 					return true;
 				} else if (dialog.kind === "watch") {
@@ -558,16 +575,16 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 						next = model.dueAt(due.includes("T") ? due : `${due}T09:00`);
 					}
 					life.transition(data, dialog.id, "watching", { watch: { on: dialog.on, every: repeat.every, next, note: dialog.note } }, t);
-					person.dialog = undefined;
+					setDialog(undefined);
 					offerUndo(c, `${dialog.checkIn ? "Still watching" : "Watching"} ${name2(dialog.id)} · ${nextCheckIn(dialog.id)}`, before);
 					return true;
 				} else if (dialog.kind === "updates") {
 					const e = dialog.editing;
 					if (!e) {
-						model.addUpdate(data, dialog.id, dialog.draft, t);
+						answer = { task: dialog.id, update: model.addUpdate(data, dialog.id, dialog.draft, t).id };
 						// Stay for the next one: the composer comes back empty (a new field id) and focused.
 						// A next step closes: the task is back to work.
-						person.dialog = dialog.resume ? undefined : { kind: "updates", id: dialog.id, draft: "" };
+						setDialog(dialog.resume ? undefined : { kind: "updates", id: dialog.id, draft: "" });
 						return true;
 					}
 					const was = model.findUpdate(model.findTask(data, dialog.id), e.update);
@@ -575,7 +592,7 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					// Last updated follows the text unless the person set it.
 					const setUpdated = e.updated !== model.toLocalInput(was.updated);
 					model.editUpdate(data, dialog.id, e.update, { text: e.text, added, ...(setUpdated && { updated: model.fromLocalInput(e.updated, was.updated, "Last updated") }) }, t);
-					person.dialog = e.closeAfter ? undefined : { kind: "updates", id: dialog.id, draft: dialog.draft };
+					setDialog(e.closeAfter ? undefined : { kind: "updates", id: dialog.id, draft: dialog.draft });
 					return true;
 				} else if (dialog.kind === "label") {
 					const input = labelInput(dialog.draft);
@@ -586,17 +603,18 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 						const label = model.updateLabel(data, id, input, t);
 						const lost = had - data.tasks.filter((task) => task.labels[id] !== undefined).length;
 						if (lost) {
-							person.dialog = undefined;
+							setDialog(undefined);
 							offerUndo(c, `Saved ${label.name}; ${lost} task${lost === 1 ? " lost its value" : "s lost their values"}`, before);
 							return true;
 						}
-					} else model.addLabel(data, input);
+					} else answer = { label: model.addLabel(data, input).id };
 				} else if (dialog.kind === "relationType") {
 					model.saveRelationType(data, { id: dialog.id, name: dialog.name, inverse: dialog.inverse });
 				}
-				person.dialog = undefined;
+				setDialog(undefined);
 				return true;
 		}
+		unknown = true;
 		return false;
 	}
 
@@ -606,6 +624,8 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			declared = JSON.stringify(declaration);
 			return { "screen:tasks": declaration };
 		},
+		actions: ACTIONS,
+		forms: FORMS,
 		start(c) {
 			context = c;
 			loadOnce();
@@ -621,34 +641,36 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 			clearTimeout(reading);
 		},
 		render: {
-			"screen:tasks": (_c, v) => {
-				if (v.instance === PERSON) personTasks = v;
-				return tasksScreen(data, screenView(v), now());
-			},
+			"screen:tasks": (_c, v) => tasksScreen(data, screenView(v), now()),
 			// The screen id stays `labels` (renderer state and shortcuts key on it); it's titled Settings.
 			"screen:labels": (_c, v) => settingsScreen(data, screenView(v), now()),
 			quick: () => quickView(data, now()),
 		},
 		onView(surface, v, c) {
 			catchUp(c);
-			if (surface !== "screen:tasks" || v.instance !== PERSON) return;
-			personTasks = v;
+			if (surface !== "screen:tasks") return;
+			// The list nests at most MAX_LEVELS deep; the toolbar won't group further, and no view may.
+			if (display.requestedLevels(data, v) > display.MAX_LEVELS) return false;
 			// A task the person filters or searches away before it reads stays unread.
-			if (readingId !== undefined && !shownRow(v, readingId, now())) {
+			if (v.instance === PERSON && readingId !== undefined && !shownRow(v, readingId, now())) {
 				clearTimeout(reading);
 				readingId = undefined;
 			}
 		},
-		// Only the person sends events (agents only read), so `person.dialog` is theirs.
-		onEvent(surface, name, payload, c) {
+		// An agent's instance closes with its dialog; the person's dialog stays for their next look.
+		onClose(_surface, _c, { instance, origin }) {
+			if (origin === "agent") dialogs.delete(instance);
+		},
+		onEvent(surface, name, payload, c, ev) {
 			// Work on a copy so a rejected change leaves the data exactly as it was.
 			const before = structuredClone(data);
 			const offered = undo;
+			answer = undefined;
+			unknown = false;
 			try {
 				// Catch up with the clock first (a snooze may have ended since the last timer).
 				const timed = life.tick(data, now());
-				viewChanged = false;
-				let changed = onEvent(surface, name, payload, c, before);
+				let changed = onEvent(surface, name, payload, c, before, ev);
 				// A stalled task touched by this change (its next step written, or edited) is back to work.
 				for (const id of life.resumeTouched(data, now())) {
 					c.toast(`#${id} is back in Working on`, "success");
@@ -663,17 +685,24 @@ else if (p.field === "related") dialog.start = { ...(dialog.start ?? newTaskStar
 					save(data);
 					badge(c);
 					schedule();
-				} else if (viewChanged) save(data);
+				}
+				if (unknown) return false;
+				return answer && { data: answer };
 			} catch (e) {
 				data = before;
 				undo = offered;
 				if (!(e instanceof InvalidInput)) throw e;
-				if (person.dialog && name === "save") person.dialog.error = e.message;
-				else c.toast(e.message, "error");
+				// The message shows where the sender acted: in the open dialog on Save, else as a toast
+				// (an agent gets it in the result instead), and the event reports it as its error.
+				const dialog = dialogs.get(ev.instance);
+				if (dialog && name === "save") dialog.error = e.message;
+				else if (ev.origin === "person") c.toast(e.message, "error");
+				throw new Error(e.message);
+			} finally {
+				// So do the view declarations (a filter per label), whether the change held or was rejected.
+				redeclare(c);
+				c.invalidate();
 			}
-			// So do the view declarations (a filter per label), whether the change held or was rejected.
-			redeclare(c);
-			c.invalidate();
 		},
 	};
 }

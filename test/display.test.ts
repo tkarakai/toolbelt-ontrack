@@ -56,6 +56,19 @@ test("views start from the stored row: its selections and arrangement", () => {
 		search: true,
 		filters: { "label:3": ["High"], "workflow-state": ["inbox"], due: [], "label:1": [], "label:2": [], "label:4": [] },
 		arrange: { order: ["label:3", "workflow-state", "due", "label:1", "label:2", "label:4"], grouped: ["label:3", "workflow-state"] },
+		controls: { subtasks: "off" },
+		// The values each filter and the Subtasks control may take: a view asking for others is refused.
+		options: {
+			filters: {
+				"label:3": ["High", "Medium", "Low", "__none"],
+				"workflow-state": ["inbox", "working", "stalled", "snoozed", "watching", "settled", "archived"],
+				due: ["overdue", "today", "next6", "later", "past", "none"],
+				"label:1": d.filterValues(data, "label:1"),
+				"label:2": ["yes", "__none"],
+				"label:4": ["Todo", "In progress", "Blocked", "__none"],
+			},
+			controls: { subtasks: ["off", "own", "parent"] },
+		},
 	});
 });
 

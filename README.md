@@ -88,8 +88,14 @@ Upgrading from OnTrack 0.14 or earlier keeps the filters and grouping you had.
   with an earlier date) and No date. Groups move on by themselves at midnight.
 - A **label** offers its values and *No <label>* (a yes/no label: Yes and No).
 
-AI agents connected to Toolbelt can read your tasks, each with search, filters and grouping of its
-own: what an agent looks at never changes what you see. They can't change tasks.
+AI agents connected to Toolbelt can read your tasks, each with search, filters, grouping and
+Subtasks choice of its own: what an agent looks at never changes what you see. When you allow it
+(Settings → Agents, *Read and act*), an agent can also work with your tasks the way you do: create
+them through New task, relate, snooze and watch them through their dialogs, move them through the
+workflow, settle them, write updates and edit labels. Toolbelt asks you before each change unless
+you allow that agent's changes for a while, and always before deleting or before a label edit
+that takes values off tasks. An agent's dialogs are its own, so your open drafts stay yours, and
+a task an agent opens stays unread for you. Its changes offer you Undo like your own.
 
 Groups show only when they have tasks, except at the top of a Workflow grouping, where each state
 you show is there even when empty, as before. Settled and Archived start collapsed. Grouping
@@ -105,7 +111,8 @@ grouping (or the task, following its parent, is in a different state from its gr
 ### Subtasks
 
 A task's **Parent** relation makes it a subtask. The **Subtasks** menu, after the filters, picks
-how they show (saved with your tasks, so agents see your choice too):
+how they show. Like the filters, it's part of your view: Toolbelt keeps it, and agents choose
+their own:
 
 - **Off**: every task on a row of its own.
 - **Stay in their own group**: subtasks nest under their parent within their own group. A
@@ -169,7 +176,8 @@ drag, the drawer's Workflow and the quick view all go through it, and anything e
 with a hint (for example "Bring it back to the Inbox first (P), then start working on it.").
 **P** is the way back: it starts work from the Inbox and brings a task back to the Inbox from
 anywhere else. **Z**, **W** and **S** put a task in Snoozed, Watching or Settled, or change it
-when it's already there. **⇧P** marks a task you're working on stalled; writing its next step
+when it's already there; **S** on a settled task marks it not done, back in the Inbox, so S
+toggles done. **⇧P** marks a task you're working on stalled; writing its next step
 (**↵**) brings it back.
 
 | From \ key | **P** | **⇧P** | **Z** | **W** | **S** |
@@ -179,7 +187,7 @@ when it's already there. **⇧P** marks a task you're working on stalled; writin
 | **Stalled** | → Inbox (unread) | — | → Snoozed | → Watching | → Settled |
 | **Snoozed** | → Inbox (wake) | — | change the snooze time | → Watching | → Settled |
 | **Watching** | → Inbox (stop watching) | — | — | change the watch | → Settled |
-| **Settled** | → Inbox (reopen) | — | — | → Watching | — |
+| **Settled** | → Inbox (reopen) | — | — | → Watching | → Inbox (Not done) |
 | *Archived* | **A** unarchives; E edits, ⇧U adds an update, Delete | | | | |
 
 From Stalled, ↵ (an update) is the way back to Working on: see [Stalling](#stalling).
